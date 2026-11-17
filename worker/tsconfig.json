@@ -1,0 +1,25 @@
+{
+  // Separate tsconfig for the Worker: it runs on the Workers runtime, whose
+  // Request/Response/fetch types differ from the app's DOM lib. Keeping it out
+  // of the root tsconfig (which includes only "src") avoids the type clash.
+  // Checked via `bun run typecheck:worker`.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022"],
+    "types": ["@cloudflare/workers-types"],
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    // worker/version.ts imports ../package.json -- one source for the version
+    // the MCP server advertises and the sync handshake stamps (ADR 0046).
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": false
+  },
+  "include": ["."],
+  // Worker unit tests (*.test.ts) use bun:test + Bun globals; they're typechecked
+  // on their own via tsconfig.test.json, not here (workers-types has no Bun lib).
+  "exclude": ["**/*.test.ts"]
+}

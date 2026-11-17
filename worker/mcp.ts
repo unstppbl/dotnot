@@ -1,0 +1,430 @@
+/**
+ * The MCP endpoint: Model Context Protocol over stateless Streamable HTTP.
+ *
+ * Deliberately hand-rolled as one Effect pipeline instead of Effect's own
+ * `McpServer.layerHttp` or the official SDK: both keep per-client session state
+ * in isolate memory, and Workers isolates are neither long-lived nor sticky —
+ * a follow-up POST can land on a fresh isolate and find no session. So this
+ * server is STATELESS by design (the spec's no-session mode): every POST is
+ * self-contained, `initialize` returns no `Mcp-Session-Id`, GET streams are
+ * declined with 405. All state lives where it already lives — the per-user DO.
+ * See docs/adr/0026-agent-native-mcp-server.md.
+ *
+ * The protocol surface is small on purpose: initialize / ping / tools. Tool
+ * input schemas are DERIVED from the registry's Effect Schemas
+ * (`Schema.toJsonSchemaDocument`), so the contract `tools/list` publishes and
+ * the validator `tools/call` enforces are the same value (ADR 0014's rule).
+ * JSON-RPC-level failures (parse, bad request, unknown method/tool, bad args)
+ * map to typed error responses; tool-level refusals and store faults surface
+ * as `isError` tool results carrying their real reason (the caller is the
+ * store owner's own agent); only unexpected
+ * non-store defects collapse to -32603.
+ */
+
+import {
+  Effect,
+  JsonSchema as EffectJsonSchema,
+  Predicate,
+  Schema,
+} from "effect";
+
+import {
+  type AfterTextWrite,
+  type OutlineStore,
+  type ToolResult,
+  tools,
+} from "./mcp-tools";
+import { APP_VERSION } from "./version";
+
+// --- Protocol constants -------------------------------------------------------
+
+/** Spec revisions this server speaks. `initialize` echoes the client's version
+ *  when supported and counter-offers the newest otherwise. */
+const SUPPORTED_PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"];
+const LATEST_PROTOCOL_VERSION = "2025-06-18";
+
+/** `version` is informational: MCP clients negotiate `protocolVersion` (the spec
+ *  date, above) and never pin a server version. It still has to be TRUE — read
+ *  from package.json, not typed here (ADR 0046). */
+const SERVER_INFO = {
+  name: "dotflowy",
+  title: "Dotnot",
+  version: APP_VERSION,
+  // Additive display metadata: icon-aware clients can render it without
+  // changing the protocol revisions this server actually implements.
+  icons: [
+    {
+      src: "http://localhost:8787/icon-192.png",
+      mimeType: "image/png",
+      sizes: ["192x192"],
+    },
+  ],
+};
+
+const SERVER_INSTRUCTIONS =
+  'Dotnot is the user\'s personal outline (nested bullets; some are to-dos; daily notes live under a "Daily" container). ' +
+  "Read with get_outline / search_nodes — every line carries the node id the write tools need. " +
+  "add_to_today and mirror_to_today are the fastest ways to put something on the user's daily note; " +
+  'pass `timeZone` (e.g. "America/New_York") so an omitted `date` resolves to the user\'s own today. ' +
+  "Every tool that creates nodes requires `sourceApp`: the app you are running in (not the model), shown as its logo on those nodes.";
+
+// JSON-RPC 2.0 error codes.
+const PARSE_ERROR = -32700;
+const INVALID_REQUEST = -32600;
+const METHOD_NOT_FOUND = -32601;
+const INVALID_PARAMS = -32602;
+const INTERNAL_ERROR = -32603;
+// Server-defined range (-32000..-32099): the caller's plan doesn't include agent
+// access (#170). A JSON-RPC error, not a tool `isError`, so a free connection
+// can still initialize + discover but no tool call ever touches the outline.
+const UPGRADE_REQUIRED = -32001;
+const UPGRADE_MESSAGE =
+  "Agent access requires Pro or Founding. Open http://localhost:8787/settings#billing to opt into a 14-day Pro trial with no card required, if eligible, or subscribe. Browser Checkout must be completed; connecting an agent does not start a trial.";
+
+// --- Wire schemas (the /api/mcp trust boundary) --------------------------------
+
+const JsonRpcIdSchema = Schema.Union([
+  Schema.String,
+  Schema.Number,
+  Schema.Null,
+]);
+type JsonRpcId = Schema.Schema.Type<typeof JsonRpcIdSchema>;
+
+const JsonRpcMessageSchema = Schema.Struct({
+  jsonrpc: Schema.Literal("2.0"),
+  // Absent id = a notification (no response expected).
+  id: Schema.optional(JsonRpcIdSchema),
+  method: Schema.String,
+  // Params arrive as raw JSON off the request body; each method decodes its
+  // own shape below.
+  params: Schema.optional(Schema.Json),
+});
+
+const InitializeParamsSchema = Schema.Struct({
+  protocolVersion: Schema.optional(Schema.String),
+});
+
+const CallToolParamsSchema = Schema.Struct({
+  name: Schema.String,
+  arguments: Schema.optional(Schema.Json),
+});
+
+/** A JSON-RPC params value: raw JSON off the request body, pre-decode. */
+type RpcJson = (typeof JsonRpcMessageSchema.Type)["params"];
+
+// --- Response builders ----------------------------------------------------------
+
+/** CORS for browser-based MCP clients (e.g. the inspector). Safe to be open:
+ *  the endpoint is bearer-token gated, never cookie-authenticated. */
+const CORS_HEADERS = {
+  "access-control-allow-origin": "*",
+  "access-control-allow-methods": "POST, OPTIONS",
+  "access-control-allow-headers":
+    "content-type, authorization, mcp-protocol-version, mcp-session-id",
+};
+
+/** A JSON-RPC 2.0 response body: exactly one of result or error. */
+type JsonRpcResponse =
+  | { jsonrpc: "2.0"; id: JsonRpcId; result: RpcResult }
+  | {
+      jsonrpc: "2.0";
+      id: JsonRpcId;
+      error: { code: number; message: string };
+    };
+
+function json(data: JsonRpcResponse, status = 200): Response {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { "content-type": "application/json", ...CORS_HEADERS },
+  });
+}
+
+function rpcResult(id: JsonRpcId, result: RpcResult): Response {
+  return json({ jsonrpc: "2.0", id, result });
+}
+
+function rpcError(id: JsonRpcId, code: number, message: string): Response {
+  return json({ jsonrpc: "2.0", id, error: { code, message } });
+}
+
+/** A notification was accepted; there is nothing to say back. */
+function accepted(): Response {
+  return new Response(null, { status: 202, headers: CORS_HEADERS });
+}
+
+/** The CORS preflight response — storeless, so worker/index.ts can answer the
+ *  pre-auth OPTIONS on /mcp without fabricating an outline store. */
+export function mcpCorsPreflight(): Response {
+  return new Response(null, { status: 204, headers: CORS_HEADERS });
+}
+
+// --- tools/list ------------------------------------------------------------------
+// Computed once at module load: the registry is static, and deriving the JSON
+// Schema from each tool's Effect Schema here guarantees the published contract
+// can't drift from the decoder used in tools/call below.
+
+/** One tools/list entry: the tool's name, doc, and registry-derived input
+ *  schema (a JSON Schema document, per toJsonSchemaDocument). */
+interface ToolDescriptor {
+  name: string;
+  description: string;
+  inputSchema: EffectJsonSchema.JsonSchema;
+  outputSchema?: EffectJsonSchema.JsonSchema;
+  annotations: {
+    title: string;
+    readOnlyHint: boolean;
+    destructiveHint: boolean;
+    openWorldHint: boolean;
+  };
+}
+
+/** The result payloads this server returns: handshake metadata, the tool
+ *  list, tool output, or nothing (ping). */
+type RpcResult =
+  | {
+      protocolVersion: string;
+      capabilities: { tools: { listChanged: boolean } };
+      serverInfo: typeof SERVER_INFO;
+      instructions: string;
+    }
+  | { tools: ToolDescriptor[] }
+  | ToolResult
+  | Record<string, never>;
+
+function publishedSchema(schema: Schema.Top): EffectJsonSchema.JsonSchema {
+  const doc = Schema.toJsonSchemaDocument(schema);
+  const jsonSchema = { ...doc.schema };
+  if (Object.keys(doc.definitions).length)
+    jsonSchema["$defs"] = doc.definitions;
+  return jsonSchema;
+}
+
+const toolList: ToolDescriptor[] = tools.map((tool) => {
+  const descriptor: ToolDescriptor = {
+    name: tool.name,
+    description: tool.description,
+    inputSchema: publishedSchema(tool.input),
+    annotations: {
+      title: tool.title,
+      readOnlyHint: tool.readOnly,
+      destructiveHint: tool.destructive,
+      openWorldHint: tool.openWorld ?? false,
+    },
+  };
+  if (tool.output) descriptor.outputSchema = publishedSchema(tool.output);
+  return descriptor;
+});
+
+// --- Dispatch --------------------------------------------------------------------
+
+const decodeOrNull = <
+  S extends Schema.Top & { readonly DecodingServices: never },
+>(
+  schema: S,
+  value: RpcJson,
+): S["Type"] | null => {
+  const result = Schema.decodeUnknownOption(schema)(value);
+  return result._tag === "Some" ? result.value : null;
+};
+
+function handleInitialize(id: JsonRpcId, params: RpcJson): Response {
+  const parsed = decodeOrNull(InitializeParamsSchema, params ?? {});
+  const requested = parsed?.protocolVersion;
+  const protocolVersion =
+    requested && SUPPORTED_PROTOCOL_VERSIONS.includes(requested)
+      ? requested
+      : LATEST_PROTOCOL_VERSION;
+  return rpcResult(id, {
+    protocolVersion,
+    capabilities: { tools: { listChanged: false } },
+    serverInfo: SERVER_INFO,
+    instructions: SERVER_INSTRUCTIONS,
+  });
+}
+
+function handleToolCall(
+  id: JsonRpcId,
+  params: RpcJson,
+  store: OutlineStore,
+  afterTextWrite: AfterTextWrite | undefined,
+  permission: "read" | "write",
+): Effect.Effect<Response> {
+  const call = decodeOrNull(CallToolParamsSchema, params);
+  if (!call) {
+    return Effect.succeed(
+      rpcError(id, INVALID_PARAMS, "expected params {name, arguments}"),
+    );
+  }
+  const tool = tools.find((t) => t.name === call.name);
+  if (!tool)
+    return Effect.succeed(
+      rpcError(id, INVALID_PARAMS, `unknown tool: ${call.name}`),
+    );
+
+  // Discovery is not authorization: refuse direct calls to hidden write tools.
+  if (permission === "read" && !tool.readOnly)
+    return Effect.succeed(
+      rpcResult(id, {
+        content: [
+          {
+            type: "text",
+            text: "This API key is read-only. Create a Read and write key in Dotnot Settings → Connections → API keys to make changes.",
+          },
+        ],
+        isError: true,
+      }),
+    );
+
+  const decodeInput = Schema.decodeUnknownEffect(tool.input);
+  return decodeInput(call.arguments ?? {}).pipe(
+    Effect.mapError((issue) => rpcError(id, INVALID_PARAMS, issue.message)),
+    Effect.flatMap((input) =>
+      tool.handle(input, store, afterTextWrite).pipe(
+        Effect.map((result) =>
+          rpcResult(
+            id,
+            Predicate.isString(result)
+              ? { content: [{ type: "text", text: result }] }
+              : result,
+          ),
+        ),
+        Effect.catchTag("ToolError", (e) =>
+          Effect.succeed(
+            rpcResult(id, {
+              content: [{ type: "text", text: `Error: ${e.reason}` }],
+              isError: true,
+            }),
+          ),
+        ),
+      ),
+    ),
+    // The typed channel above only ever carries the already-built INVALID_PARAMS
+    // response; fold it back into the success track.
+    Effect.catch((response) => Effect.succeed(response)),
+    // A defect here is an unexpected DO/runtime fault — answer inside the
+    // protocol (the client can't use an HTTP 500) without leaking internals.
+    Effect.catchDefect(() =>
+      Effect.succeed(rpcError(id, INTERNAL_ERROR, "internal error")),
+    ),
+  );
+}
+
+function dispatch(
+  message: typeof JsonRpcMessageSchema.Type,
+  store: OutlineStore,
+  agentAccess: boolean,
+  afterTextWrite?: AfterTextWrite,
+  permission: "read" | "write" = "write",
+): Effect.Effect<Response> {
+  // A notification (no id) never gets a JSON-RPC response body, whatever the
+  // method — `notifications/initialized` and friends land here.
+  if (message.id === undefined) return Effect.succeed(accepted());
+  const id = message.id;
+
+  switch (message.method) {
+    case "initialize":
+      return Effect.succeed(handleInitialize(id, message.params));
+    case "ping":
+      return Effect.succeed(rpcResult(id, {}));
+    case "tools/list":
+      return Effect.succeed(
+        rpcResult(id, {
+          tools:
+            permission === "read"
+              ? toolList.filter((tool) => tool.annotations.readOnlyHint)
+              : toolList,
+        }),
+      );
+    case "tools/call":
+      // The entitlement gate: initialize/ping/tools/list stay open so a free
+      // connection can handshake and see WHY. Only the read-only trial setup
+      // information is exempt; all outline tools still require Pro (#170).
+      const trialInfo = decodeOrNull(CallToolParamsSchema, message.params);
+      return agentAccess || trialInfo?.name === "get_pro_trial"
+        ? handleToolCall(id, message.params, store, afterTextWrite, permission)
+        : Effect.succeed(rpcError(id, UPGRADE_REQUIRED, UPGRADE_MESSAGE));
+    default:
+      return Effect.succeed(
+        rpcError(id, METHOD_NOT_FOUND, `method not found: ${message.method}`),
+      );
+  }
+}
+
+// --- HTTP surface ------------------------------------------------------------------
+
+/**
+ * Handle one HTTP exchange on /mcp (or its /api/mcp alias) for an already-authenticated user.
+ * Total: every failure mode becomes a well-formed HTTP/JSON-RPC response, so
+ * the caller (worker/index.ts) can treat this as infallible routing.
+ *
+ * Provenance comes from each write tool's required `sourceApp` argument
+ * (ADR 0081), not from the bearer token.
+ *
+ * `agentAccess` is the caller's entitlement (#170): false for a free plan, which
+ * refuses every tools/call with an upgrade error while leaving the handshake +
+ * discovery open. worker/index.ts resolves it from the token's plan.
+ */
+export function handleMcp(
+  request: Request,
+  store: OutlineStore,
+  agentAccess: boolean,
+  afterTextWrite?: AfterTextWrite,
+  permission: "read" | "write" = "write",
+): Effect.Effect<Response> {
+  switch (request.method) {
+    case "OPTIONS":
+      return Effect.succeed(mcpCorsPreflight());
+    case "POST":
+      break;
+    default:
+      // Stateless mode: no server-initiated SSE stream (GET) and no session to
+      // end (DELETE). 405 tells a spec-compliant client to carry on with POSTs.
+      return Effect.succeed(
+        new Response(JSON.stringify({ error: "method not allowed" }), {
+          status: 405,
+          headers: {
+            "content-type": "application/json",
+            allow: "POST, OPTIONS",
+            ...CORS_HEADERS,
+          },
+        }),
+      );
+  }
+
+  return Effect.gen(function* () {
+    const raw = yield* Effect.tryPromise({
+      try: () => request.json(),
+      catch: () => rpcError(null, PARSE_ERROR, "malformed JSON body"),
+    });
+    if (Array.isArray(raw)) {
+      // JSON-RPC batching was removed in the 2025-06-18 MCP revision; keep the
+      // surface single-message.
+      return yield* Effect.fail(
+        rpcError(null, INVALID_REQUEST, "batch requests are not supported"),
+      );
+    }
+    const message = yield* Schema.decodeUnknownEffect(JsonRpcMessageSchema)(
+      raw,
+    ).pipe(
+      Effect.mapError((issue) =>
+        rpcError(null, INVALID_REQUEST, issue.message),
+      ),
+    );
+    return yield* dispatch(
+      message,
+      store,
+      agentAccess,
+      afterTextWrite,
+      permission,
+    );
+  }).pipe(
+    // The typed error channel only ever carries already-built error Responses.
+    Effect.catch((response) => Effect.succeed(response)),
+    // Honor the "total routing" contract: an unexpected defect outside
+    // handleToolCall (which self-guards) still answers inside the protocol
+    // rather than escaping as an HTTP 500 the client can't parse.
+    Effect.catchDefect(() =>
+      Effect.succeed(rpcError(null, INTERNAL_ERROR, "internal error")),
+    ),
+  );
+}

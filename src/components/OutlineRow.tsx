@@ -1,0 +1,704 @@
+import {
+  Fragment,
+  memo,
+  useLayoutEffect,
+  useRef,
+  type CSSProperties,
+  type RefObject,
+} from "react";
+
+import { ChevronRightIcon, LockIcon } from "@/lib/icons";
+
+import type { QueryFilter } from "../data/filter-query";
+import type { Node } from "../data/schema";
+import type { PluginContext, SlotSpec } from "../plugins/types";
+import type { NodeCommands } from "./node-commands";
+
+import { isMirrorsEnabled } from "../data/flags";
+import { isQuoteText, stripQuoteMarker } from "../data/quote";
+import { useSelectionFill } from "../data/selection-fill";
+import { clearSelection } from "../data/selection-state";
+import {
+  useIsLocked,
+  useMirrorCount,
+  useNode,
+  useNodeOrdinal,
+  useVisibleChildIds,
+} from "../data/tree-store";
+import { rowKeyFor } from "../data/visible-order";
+import {
+  autoformat,
+  getProtection,
+  usePluginChrome,
+  useIsProtected,
+} from "../plugins/registry";
+import { hasFoldingToken } from "../plugins/registry";
+import { BulletGlyph } from "./bullet-glyph";
+import { focusTextFromRowTap } from "./caret-place";
+import {
+  useCaretReveal,
+  useInputDecoration,
+  useStoredTextDecoration,
+} from "./editor-decoration";
+import { flashRow } from "./flash-node";
+import {
+  decorate,
+  getCaretOffset,
+  readSource,
+  setCaretOffset,
+} from "./inline-code";
+import { useMenus } from "./menu-engine";
+import { MirrorBadge } from "./mirror-chrome";
+import { NodeBody } from "./node-body";
+import { NodeDecorations } from "./NodeDecorations";
+import {
+  copySourceSelection,
+  cutSourceSelection,
+  pasteIntoBullet,
+} from "./paste";
+import { applyPendingCaret } from "./pending-caret";
+import { healProtectedText } from "./protected-text";
+import { ProtectionIndicator } from "./protection";
+import { useSlashMenu } from "./slash-menu";
+import { useBulletKeymap } from "./use-bullet-keymap";
+
+// Indent per depth level -- the single source for outline indentation, which
+// the drag projection reads too (use-drag-reorder.ts INDENT_FALLBACK).
+export const INDENT_PX = 24;
+
+/**
+ * One flat, windowed outline row (ADR 0019) -- THE outline row (the recursive
+ * fallback path was deleted once dogfooded). It is a LEAF (no children
+ * recursion): its nesting is `depth`-driven padding rather than DOM structure,
+ * and it claims pending focus/flash on its own mount (a scroll that mounts a
+ * row is not a tree change, so the editor's central FocusPass can't see it).
+ *
+ * Mirrors (ADR 0022) split a row's identity in two: {@link nodeId} is the
+ * INSTANCE (where the row physically sits -- its `parentId`, `collapsed`, drag
+ * target, selection edge), {@link contentId} is the CONTENT (`text`, `isTask`,
+ * `completed`, children). For a normal row they're equal and the row takes the
+ * single-`useNode` fast path; only a mirror subscribes to both. The split is
+ * inert while the mirrors flag is off (every row arrives with `contentId === id`,
+ * `isMirror` false), so the 99% outline runs exactly today's code.
+ */
+export interface OutlineRowProps {
+  // The INSTANCE node id (row.id) -- where this row physically sits. Drives
+  // position, collapse, drag, selection.
+  nodeId: string;
+  // The render ADDRESS (row.key): the refs/focus/flash key. A bare id until the
+  // walk crosses a mirror, then a path key, so a source descendant rendered under
+  // two instances registers two distinct spans (ADR 0022). Equals nodeId for
+  // every mirror-free row, so the 99% outline keeps today's identity.
+  rowKey: string;
+  // The CONTENT node id (row.contentId): `mirrorOf ?? id`. Equal to nodeId for
+  // every normal row; the source's id for a mirror. Drives text/task/completed
+  // and the windowed children.
+  contentId: string;
+  // This row IS a mirror (its own `mirrorOf` is set). When false, nodeId ===
+  // contentId and the row takes the single-subscription path.
+  isMirror: boolean;
+  // A mirror whose source is an expanded ancestor on this path (a cycle): render
+  // the row but non-expandable, so the walk can't loop (ADR 0022).
+  capped: boolean;
+  // A mirror whose source resolves to no node: render a "source missing" leaf.
+  broken: boolean;
+  // Depth relative to the zoom root (direct child of the root = 0). Drives the
+  // left indent. Comes from the flat list, stable per id until structure shifts.
+  depth: number;
+  // True when an ancestor within the view is completed (fade inheritance, ADR
+  // 0002). Carried by the flat list, not threaded through a parent row.
+  ancestorCompleted: boolean;
+  // Retained only for the brief hide-completed exit; never persisted.
+  exiting: boolean;
+  exitInert: boolean;
+  commands: NodeCommands;
+  pluginCtx: () => PluginContext;
+  registerRef: (id: string, el: HTMLSpanElement | null) => void;
+  pivotId: string | null;
+  isHidden: (node: Node) => boolean;
+  filter: QueryFilter | null;
+  // Focus plumbing, claimed on mount. Stable refs (from useOutlineFocus).
+  pendingFocus: RefObject<string | null>;
+  pendingFocusAtStart: RefObject<boolean>;
+  pendingFlash: RefObject<string | null>;
+  // Virtualizer wiring. The row IS the positioned + measured element (so the
+  // `li[data-node-id]` the e2e selectors and CSS expect stays an <li> directly
+  // under the list <ul>). start/scrollMargin change on scroll -> the row
+  // re-renders to reposition; that's expected for a windowed list, and the memo
+  // still isolates TYPING (an unrelated keystroke changes none of these props).
+  index: number;
+  start: number;
+  scrollMargin: number;
+  measureRef: (el: HTMLLIElement | null) => void;
+}
+
+export const OutlineRow = memo(function OutlineRow(props: OutlineRowProps) {
+  // Mirror split happens at the hook boundary (rules of hooks forbid a
+  // conditional `useNode`): a mirror subscribes to two nodes, a normal row to
+  // one. Both funnel into the same {@link RowChrome}.
+  return props.isMirror ? <MirrorRow {...props} /> : <NormalRow {...props} />;
+});
+
+/** The mirror-free fast path: a single subscription, content === instance.
+ *  Byte-identical to the pre-mirror row. */
+function NormalRow({ nodeId, ...rest }: OutlineRowProps) {
+  const node = useNode(nodeId);
+  if (!node) return null;
+  return <RowChrome instance={node} content={node} {...rest} />;
+}
+
+/** A mirror: the instance (position) and the content (source) are different
+ *  nodes, so it subscribes to both. A missing source renders a leaf. */
+function MirrorRow({ nodeId, contentId, broken, ...rest }: OutlineRowProps) {
+  const instance = useNode(nodeId);
+  const content = useNode(contentId);
+  if (!instance) return null;
+  if (broken || !content) {
+    return (
+      <MirrorMissingRow
+        instance={instance}
+        depth={rest.depth}
+        index={rest.index}
+        start={rest.start}
+        scrollMargin={rest.scrollMargin}
+        measureRef={rest.measureRef}
+      />
+    );
+  }
+  return <RowChrome instance={instance} content={content} {...rest} />;
+}
+
+type RowChromeProps = Omit<
+  OutlineRowProps,
+  "nodeId" | "contentId" | "broken"
+> & {
+  /** The position node (parentId/collapsed/drag/selection live here). */
+  instance: Node;
+  /** The content node (text/isTask/completed/children live here). */
+  content: Node;
+};
+
+/**
+ * The shared row body. Reads CONTENT from `content` (`mirrorOf ?? id`) and
+ * POSITION from `instance` (the node id). For a normal row the two are the same
+ * object, so nothing about the mirror-free path changes; for a mirror the text/
+ * children/completed come from the source while collapse/drag/zoom/selection
+ * stay on the instance (ADR 0022). Editing the mirror's text writes the SOURCE
+ * (`commands.onTextChange(content.id, ...)`), which is how an edit in one place
+ * shows up everywhere. Full caret/focus/drag parity inside a mirror is Stage 2.
+ */
+function RowChrome({
+  instance,
+  content,
+  rowKey,
+  isMirror,
+  capped,
+  depth,
+  ancestorCompleted,
+  exiting,
+  exitInert,
+  commands,
+  pluginCtx,
+  registerRef,
+  pivotId,
+  isHidden,
+  filter,
+  pendingFocus,
+  pendingFocusAtStart,
+  pendingFlash,
+  index,
+  start,
+  scrollMargin,
+  measureRef,
+}: RowChromeProps) {
+  const textRef = useRef<HTMLSpanElement | null>(null);
+  const ordinal = useNodeOrdinal(instance.id);
+  const numberStyle: CSSProperties & { "--number-width"?: string } = {
+    "--number-width":
+      ordinal === undefined ? undefined : `${String(ordinal).length + 1}ch`,
+  };
+  const {
+    syncedRef,
+    composingRef,
+    paintInput,
+    startComposition,
+    endComposition,
+  } = useInputDecoration(textRef);
+  const caretReveal = useCaretReveal(composingRef, syncedRef);
+  const { slotsByPosition } = usePluginChrome();
+
+  // Direct visible children of the CONTENT -- a mirror windows its source's
+  // subtree, so the chevron + collapsed dot follow the source's children. No
+  // recursion: the flat list already holds the descendants as their own rows.
+  // With windowing only ~viewport rows call this, so the per-parent fan-out
+  // stays a viewport's worth, never the whole tree.
+  const childIds = useVisibleChildIds(content.id, isHidden);
+  const childKeyPrefix = isMirror || rowKey !== instance.id ? rowKey : null;
+  const hasVisibleChildren = filter
+    ? childIds.some((id) =>
+        filter.visibleIds.has(rowKeyFor(childKeyPrefix, id)),
+      )
+    : childIds.length > 0;
+  // Only the boolean is needed here (a leaf row has no children list to pass
+  // down), so test emptiness without materializing the filtered array. A capped
+  // mirror is never expandable (it would loop), so it shows no chevron.
+  const hasChildren = capped
+    ? false
+    : hasVisibleChildren ||
+      (filter
+        ? filter.matchIds.has(rowKey) &&
+          filter.retainedKey !== rowKey &&
+          childIds.length > 0
+        : false);
+  // Matches stay expandable when their nonmatching children are collapsed.
+  // Ancestor context remains visually expanded when the filter reveals a match.
+  const effectiveCollapsed = filter ? !hasVisibleChildren : instance.collapsed;
+  const isContext = filter ? !filter.matchIds.has(rowKey) : false;
+  // The zoom morph (`view-transition-name: zoom-target`) must name exactly ONE
+  // element -- the browser aborts the transition on a duplicate name. pivotId is
+  // a node id, but it addresses the row by KEY, not content: a source and every
+  // mirror of it share a content id, so `content.id === pivotId` would tag the
+  // source's own row AND each visible mirror row at once (a persistent duplicate
+  // that crashes the next zoom). rowKey is per-instance, so only the source's own
+  // canonical row (key === id) morphs; mirror rows carry path/instance keys and
+  // never collide. For a mirror-free row key === id === content.id, so the 99%
+  // path is byte-identical (ADR 0022).
+  const isPivot = rowKey === pivotId;
+  const faded = content.completed || ancestorCompleted;
+
+  const slash = useSlashMenu({
+    node: content,
+    ctx: pluginCtx,
+    getEl: () => textRef.current,
+    onTextChange: (text) => commands.onTextChange(content.id, text),
+  });
+
+  const protectedNode = useIsProtected(content.id);
+  const protection = protectedNode ? getProtection(content.id) : null;
+  const locked = useIsLocked(content.id);
+  // Covers this row AND its visible descendants (2e-2) -- the flat list has no
+  // DOM nesting for a root's tint to paint behind its children, so every
+  // covered row reads its own value.
+  // Keyed by rowKey (the render address), not instance.id, so a windowed mirror
+  // descendant and its source's canonical row are independent reads.
+  const selectionFill = useSelectionFill(rowKey);
+  // Mirror chrome (ADR 0022, slice 1d). The count is the same for the source row
+  // and every instance (they share the content id), so the "appears in N places"
+  // badge shows on all of them. `mirrorsOn` is session-fixed, so the hook adds no
+  // reactive work when the flag is off (useMirrorCount short-circuits).
+  const mirrorsOn = isMirrorsEnabled();
+  const mirrorCount = useMirrorCount(content.id, mirrorsOn);
+  const isSource = !isMirror && mirrorCount > 0;
+  // The plugin row slots (Seam F) plus the two core decorations (protected lock,
+  // mirror badge) in ONE list, so the row renders them uniformly instead of a
+  // standalone conditional per decoration -- core decorations aren't plugins
+  // (registering them in plugins/index.ts would misrepresent them), but they
+  // share the same {id, render} shape, so a slot-list `.map()` covers all of it.
+  const beforeTextSlots: SlotSpec[] = [
+    ...(slotsByPosition.get("row:before-text") ?? []),
+    {
+      id: "core:protection-indicator",
+      position: "row:before-text",
+      render: () =>
+        protectedNode || locked ? (
+          <ProtectionIndicator
+            size={12}
+            label={
+              locked
+                ? "Locked subtree"
+                : (protection?.indicator?.label ?? "Protected node")
+            }
+            icon={locked ? LockIcon : protection?.indicator?.icon}
+          />
+        ) : null,
+    },
+    {
+      id: "core:mirror-badge",
+      position: "row:before-text",
+      render: () =>
+        mirrorsOn && mirrorCount > 0 ? (
+          <MirrorBadge sourceId={content.id} count={mirrorCount} />
+        ) : null,
+    },
+  ];
+
+  const menus = useMenus({
+    node: content,
+    getEl: () => textRef.current,
+    ctx: pluginCtx,
+    onTextChange: (text) => commands.onTextChange(content.id, text),
+  });
+
+  // Mount: seed the span's text synchronously before paint (the update effect's
+  // focused-skip guard is unsafe until the DOM is populated, which never happens
+  // on a fresh mount -- a reparent or scroll-in mounts an empty span that
+  // FocusPass may focus before any onInput runs).
+  useLayoutEffect(() => {
+    const el = textRef.current;
+    if (!el) return;
+    decorate(el, content.text, null, false);
+    syncedRef.current = content.text;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Mount: claim a pending focus/flash queued for THIS row. The editor's central
+  // FocusPass handles rows already mounted at tree-change time; this handles a
+  // row that mounts because we scrolled it into view (scrollRowIntoView), which
+  // FocusPass never sees (a scroll isn't a tree change). Runs after the seed
+  // effect above, so the caret lands on populated text. Keyed by the row KEY
+  // (the render address) so the right instance claims it when a source descendant
+  // is windowed under two mirrors; key === id for a mirror-free row (ADR 0022).
+  useLayoutEffect(() => {
+    const el = textRef.current;
+    if (!el) return;
+    if (pendingFocus.current === rowKey) {
+      el.focus();
+      applyPendingCaret(el, rowKey, pendingFocusAtStart.current);
+      pendingFocus.current = null;
+      pendingFocusAtStart.current = false;
+    }
+    if (pendingFlash.current === rowKey) {
+      flashRow(el.closest(".outline-row"));
+      pendingFlash.current = null;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useStoredTextDecoration({
+    ref: textRef,
+    node: content,
+    syncedRef,
+    composingRef,
+  });
+
+  useBulletKeymap({
+    node: content,
+    // Collapse is local to the instance (mirrors the chevron, ADR 0022); the
+    // rest of the keymap re-resolves the instance from the focused key.
+    instanceId: instance.id,
+    instanceCollapsed: instance.collapsed,
+    textRef,
+    commands,
+    pluginCtx,
+    hasChildren,
+    enabled: !slash.isOpen && !menus.isOpen,
+  });
+
+  return (
+    <li
+      className="outline-node"
+      data-node-id={instance.id}
+      data-completion-exit={exiting || undefined}
+      inert={exitInert}
+      data-parent-id={instance.parentId ?? undefined}
+      data-depth={depth}
+      data-mirror={
+        isMirror
+          ? capped
+            ? "capped"
+            : "instance"
+          : isSource
+            ? "source"
+            : undefined
+      }
+      data-selected={selectionFill ?? undefined}
+      data-index={index}
+      ref={measureRef}
+      style={{
+        position: "absolute",
+        top: 0,
+        left: 0,
+        width: `max(100cqw, calc(${depth * INDENT_PX}px + min(100cqw, var(--outline-node-min-width))))`,
+        transform: `translateY(${start - scrollMargin}px)`,
+        paddingInlineStart: depth * INDENT_PX,
+      }}
+    >
+      <div
+        className="outline-row"
+        data-faded={faded}
+        data-context={isContext}
+        style={numberStyle}
+      >
+        {hasChildren ? (
+          <button
+            type="button"
+            className="collapse-toggle touch-hitbox"
+            aria-label={effectiveCollapsed ? "Expand" : "Collapse"}
+            aria-expanded={!effectiveCollapsed}
+            data-has-children={true}
+            data-collapsed={effectiveCollapsed}
+            onClick={() =>
+              commands.onToggleCollapsed(instance.id, !instance.collapsed)
+            }
+            tabIndex={-1}
+          >
+            <ChevronRightIcon size={14} />
+          </button>
+        ) : (
+          <span
+            className="collapse-toggle"
+            data-has-children={false}
+            aria-hidden="true"
+            inert
+          />
+        )}
+        <button
+          type="button"
+          className="bullet touch-hitbox"
+          aria-label={
+            ordinal === undefined ? "Zoom in" : `Zoom into item ${ordinal}`
+          }
+          // Drag arms with the row KEY so a windowed copy inside a mirror is the
+          // exact instance grabbed, never its source copy (ADR 0022). key === id
+          // off the flag / outside a mirror.
+          onPointerDown={(e) => commands.onBulletPointerDown(rowKey, e)}
+          // A mirror's bullet zooms to the SOURCE (content.id) -- you land on the
+          // real node to work its subtree. For a normal row content.id ===
+          // instance.id, so this is today's behavior.
+          onClick={() => commands.onBulletClick(content.id)}
+          title="Zoom in"
+        >
+          {/* Dot, paragraph glyph, or quote bar, per the CONTENT's kind and
+              text (ADR 0045, ADR 0079). */}
+          <BulletGlyph
+            kind={content.kind}
+            quote={isQuoteText(content.text)}
+            completed={content.completed}
+            hasChildren={hasChildren}
+            collapsed={effectiveCollapsed}
+            ordinal={ordinal}
+          />
+        </button>
+        {/* Block cell so wrapped text flows UNDER the slot icons: the icons
+            float left inside it (a flex item can't float, hence the wrapper),
+            shortening only the first line box. Menus stay outside -- they
+            position against .outline-row. */}
+        {/* Tap-to-edit (ADR 0029): a tap on the cell's DEAD SPACE (target ===
+            currentTarget, so never the text/links/chips/slots -- those are
+            children) focuses the text and drops a caret at the tapped point. */}
+        <div
+          className="row-body"
+          onClick={(e) => {
+            if (e.target !== e.currentTarget) return;
+            focusTextFromRowTap(textRef.current, e.clientX, e.clientY);
+          }}
+        >
+          {beforeTextSlots.map((slot) => (
+            <Fragment key={slot.id}>{slot.render(content, pluginCtx)}</Fragment>
+          ))}
+          <span
+            ref={(el) => {
+              textRef.current = el;
+              registerRef(rowKey, el);
+            }}
+            className={`node-text${isPivot ? " vt-morph" : ""}`}
+            data-kind={content.kind ?? undefined}
+            style={isPivot ? { viewTransitionName: "zoom-target" } : undefined}
+            contentEditable={!locked}
+            tabIndex={locked ? 0 : undefined}
+            suppressContentEditableWarning
+            spellCheck={false}
+            role="textbox"
+            aria-label={stripQuoteMarker(content.text).trim() || "Empty bullet"}
+            aria-readonly={locked}
+            aria-multiline="true"
+            data-completed={content.completed}
+            data-history-key={rowKey}
+            data-history-node-id={content.id}
+            onInput={(e) => {
+              const el = e.currentTarget;
+              const text = readSource(el);
+              if (
+                !composingRef.current &&
+                e.nativeEvent instanceof InputEvent &&
+                e.nativeEvent.inputType === "insertText"
+              ) {
+                const caret = getCaretOffset(el);
+                if (
+                  (content.kind === "paragraph" ||
+                    (content.kind === null && !content.isTask)) &&
+                  !protectedNode &&
+                  text.startsWith("1. ") &&
+                  caret === 3
+                ) {
+                  const nextText = text.slice(3);
+                  commands.onSetKind(content.id, "numbered", nextText);
+                  decorate(el, nextText, 0, false);
+                  syncedRef.current = nextText;
+                  setCaretOffset(el, 0);
+                  return;
+                }
+                if (
+                  content.kind === "paragraph" &&
+                  text.startsWith("- ") &&
+                  caret === 2
+                ) {
+                  const nextText = text.slice(2);
+                  commands.onSetKind(content.id, null, nextText);
+                  decorate(el, nextText, 0, false);
+                  syncedRef.current = nextText;
+                  setCaretOffset(el, 0);
+                  return;
+                }
+                const af = autoformat({ text, node: content, caret });
+                if (af) {
+                  af.before?.(pluginCtx());
+                  commands.onTextChange(content.id, af.text);
+                  decorate(el, af.text, af.caret, false);
+                  syncedRef.current = af.text;
+                  setCaretOffset(el, af.caret);
+                  return;
+                }
+              }
+              commands.onTextChange(content.id, text);
+              slash.handleInput();
+              menus.handleInput();
+              paintInput(el, text);
+            }}
+            onCompositionStart={startComposition}
+            onCompositionEnd={(e) => {
+              endComposition(e.currentTarget, (text) =>
+                commands.onTextChange(content.id, text),
+              );
+            }}
+            onPaste={(e) => {
+              const el = e.currentTarget;
+              const next = pasteIntoBullet(
+                e,
+                el,
+                content.id,
+                pluginCtx,
+                (t) => commands.onTextChange(content.id, t),
+                // A multi-line paste builds a tree here (ADR 0044). `content.id`
+                // is already mirror-resolved, so a paste into a mirror creates
+                // children on the SOURCE, never on the instance (ADR 0022).
+                {
+                  placement: "sibling",
+                  activeKey: rowKey,
+                  rowEl: el.closest(".outline-row"),
+                  focus: {
+                    setPendingFocus: commands.setPendingFocus,
+                    placeCaretHere: (text, offset) => {
+                      decorate(el, text, offset, true);
+                      setCaretOffset(el, offset);
+                      syncedRef.current = text;
+                    },
+                  },
+                },
+              );
+              if (next !== null) syncedRef.current = next;
+            }}
+            // Copy/cut hand back the markdown SOURCE (a folded link's rendered
+            // text drops the url half). See copySourceSelection (ADR 0005).
+            onCopy={(e) => copySourceSelection(e, e.currentTarget)}
+            onCut={(e) => {
+              const el = e.currentTarget;
+              const next = cutSourceSelection(e, el, (t) =>
+                commands.onTextChange(content.id, t),
+              );
+              if (next !== null) syncedRef.current = next;
+            }}
+            onFocus={(e) => {
+              if (e.target !== e.currentTarget) return;
+              clearSelection();
+              const el = e.currentTarget;
+              caretReveal.focus(el, content.text);
+            }}
+            onBlur={(e) => {
+              if (e.target !== e.currentTarget) return;
+              slash.close();
+              menus.close();
+              caretReveal.blur();
+              const el = e.currentTarget;
+              if (
+                e.relatedTarget instanceof HTMLElement &&
+                el.contains(e.relatedTarget)
+              )
+                return;
+              const text = readSource(el);
+              const restored = healProtectedText(content.id, text, el);
+              if (restored !== null) {
+                syncedRef.current = restored;
+              } else if (hasFoldingToken(text)) {
+                decorate(el, text, null, false);
+                syncedRef.current = text;
+              }
+            }}
+            onKeyDown={(e) => {
+              if (locked && e.key === "/" && !slash.isOpen) {
+                e.preventDefault();
+                slash.openWithoutInput();
+                return;
+              }
+              if (menus.handleKeyDown(e)) return;
+              slash.handleKeyDown(e);
+            }}
+          />
+          <NodeBody node={content} position="row:body" getCtx={pluginCtx} />
+        </div>
+        {/* Trailing decoration zone (Seam F `row:after-text`, ADR 0031). Flex
+            sibling of `.row-body`, hugs the trailing edge; dormant until a
+            plugin registers a trailing slot. */}
+        <NodeDecorations
+          node={content}
+          position="row:after-text"
+          getCtx={pluginCtx}
+        />
+        {slash.menu}
+        {menus.menu}
+      </div>
+    </li>
+  );
+}
+
+/**
+ * A mirror whose source resolves to no node (ADR 0022): render a non-editable
+ * "source missing" leaf in the instance's position, never recurse, never throw.
+ * Kept deliberately bare for slice 1b -- the richer broken-mirror chrome (a jump
+ * affordance, distinct styling) lands with the rest of the mirror chrome.
+ */
+function MirrorMissingRow({
+  instance,
+  depth,
+  index,
+  start,
+  scrollMargin,
+  measureRef,
+}: {
+  instance: Node;
+  depth: number;
+  index: number;
+  start: number;
+  scrollMargin: number;
+  measureRef: (el: HTMLLIElement | null) => void;
+}) {
+  return (
+    <li
+      className="outline-node"
+      data-node-id={instance.id}
+      data-parent-id={instance.parentId ?? undefined}
+      data-depth={depth}
+      data-mirror="broken"
+      data-index={index}
+      ref={measureRef}
+      style={{
+        position: "absolute",
+        top: 0,
+        left: 0,
+        width: `max(100cqw, calc(${depth * INDENT_PX}px + min(100cqw, var(--outline-node-min-width))))`,
+        transform: `translateY(${start - scrollMargin}px)`,
+        paddingInlineStart: depth * INDENT_PX,
+      }}
+    >
+      <div className="outline-row" data-faded={true}>
+        <span className="collapse-toggle touch-hitbox" aria-hidden="true" />
+        <span className="bullet touch-hitbox" aria-hidden="true">
+          <span className="bullet-dot" data-broken="true" />
+        </span>
+        <span className="node-text" aria-label="Mirror source not found">
+          Mirror (source not found)
+        </span>
+      </div>
+    </li>
+  );
+}

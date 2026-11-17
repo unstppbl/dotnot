@@ -1,0 +1,744 @@
+import { expect, test, type Page } from "@playwright/test";
+
+import {
+  openSeededOutline,
+  placeCaret,
+  seedOutline,
+  text,
+  type ApiNode,
+  type SeedNode,
+} from "./fixtures";
+
+const TREE: SeedNode[] = [
+  { id: "work", parentId: null, prevSiblingId: null, text: "Writing" },
+  {
+    id: "draft",
+    parentId: "work",
+    prevSiblingId: null,
+    text: "Finish the draft ||private detail||",
+    isTask: true,
+  },
+  {
+    id: "child",
+    parentId: "draft",
+    prevSiblingId: null,
+    text: "Existing notes",
+  },
+  { id: "other", parentId: null, prevSiblingId: "work", text: "Other work" },
+  {
+    id: "mirror",
+    parentId: null,
+    prevSiblingId: "other",
+    text: "",
+    mirrorOf: "draft",
+  },
+  {
+    id: "locked",
+    parentId: null,
+    prevSiblingId: "mirror",
+    text: "Locked task",
+    isTask: true,
+    locked: true,
+  },
+];
+const band = (page: Page) =>
+  page.getByRole("region", { name: "Focus session", exact: true });
+async function stored(page: Page): Promise<ApiNode[]> {
+  return page.evaluate(async () => (await fetch("/api/nodes")).json());
+}
+
+async function picker(page: Page, id = "draft") {
+  await placeCaret(text(page, id), "end");
+  await page.keyboard.press("ControlOrMeta+k");
+  await page
+    .getByPlaceholder(/Search nodes and commands/)
+    .fill("Focus session");
+  await page.getByRole("option", { name: /Focus session…/ }).click();
+  await expect(
+    page.getByRole("dialog", { name: "Focus session" }),
+  ).toBeVisible();
+}
+
+test("start preserves the view, away and Return land the caret, overtime Done reflects under the task", async ({
+  page,
+}) => {
+  await page.clock.install();
+  await seedOutline(page, TREE);
+  await openSeededOutline(page, { anchorId: "draft" });
+  await picker(page);
+  await page.getByRole("button", { name: "15 min", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Start focus session", exact: true })
+    .click();
+  await expect(page).toHaveURL(/\/$/);
+  await expect(band(page)).toContainText("Now");
+  await expect(band(page)).toContainText("Finish the draft [spoiler]");
+  await expect(
+    page
+      .locator('li[data-node-id="draft"]')
+      .getByRole("img", { name: "Active focus session" }),
+  ).toHaveCount(1);
+  await page.locator('li[data-node-id="other"] .bullet-dot').click();
+  await expect(band(page)).toContainText("You set out to");
+  await band(page).getByRole("button", { name: "Return", exact: true }).click();
+  await expect(page).toHaveURL(/\/draft$/);
+  const title = page.getByLabel("Title", { exact: true });
+  await expect(title).toBeFocused();
+  await expect
+    .poll(() =>
+      title.evaluate((el) => {
+        const selection = window.getSelection();
+        if (!selection?.rangeCount) return false;
+        const range = selection.getRangeAt(0).cloneRange();
+        range.selectNodeContents(el);
+        range.setStart(selection.anchorNode!, selection.anchorOffset);
+        return range.toString().length === 0;
+      }),
+    )
+    .toBe(true);
+  await page.clock.fastForward(16 * 60_000);
+  await expect(
+    band(page).getByRole("button", { name: "Done", exact: true }),
+  ).toBeVisible();
+  await expect(band(page).getByLabel("Focus time remaining")).toContainText(
+    "+",
+  );
+  await band(page).getByRole("button", { name: "Done", exact: true }).click();
+  await expect
+    .poll(
+      async () =>
+        (await stored(page)).find((node) => node.id === "draft")?.completed,
+    )
+    .toBe(true);
+  await band(page)
+    .getByRole("textbox", { name: "How did it go?" })
+    .fill("Finished the introduction");
+  await band(page)
+    .getByRole("textbox", { name: "How did it go?" })
+    .press("Enter");
+  await expect(band(page)).toHaveCount(0);
+  const reflection = (await stored(page)).find((node) =>
+    node.text.endsWith(": Finished the introduction"),
+  );
+  expect(reflection?.parentId).toBe("draft");
+  expect(reflection?.prevSiblingId).toBe("child");
+  expect(reflection?.isTask).toBe(false);
+});
+
+test("pause, replacement, Let go, mirror reflection, external completion and deletion", async ({
+  page,
+}) => {
+  await page.clock.install();
+  await seedOutline(page, TREE);
+  await openSeededOutline(page, { anchorId: "draft" });
+  await picker(page);
+  await page
+    .getByRole("button", { name: "Start focus session", exact: true })
+    .click();
+  await band(page)
+    .getByRole("button", { name: "Pause focus session", exact: true })
+    .click();
+  const time = await band(page)
+    .getByLabel("Focus time remaining")
+    .textContent();
+  await page.clock.fastForward(5 * 60_000);
+  await expect(band(page).getByLabel("Focus time remaining")).toHaveText(time!);
+  await picker(page, "mirror");
+  await expect(page.getByRole("dialog")).toContainText("Replaces:");
+  await page
+    .getByRole("button", { name: "Start focus session", exact: true })
+    .click();
+  await page.clock.fastForward(61 * 60_000);
+  await band(page).getByRole("button", { name: "Let go", exact: true }).click();
+  await band(page)
+    .getByRole("textbox", { name: "How did it go?" })
+    .fill("Need another pass");
+  await band(page)
+    .getByRole("textbox", { name: "How did it go?" })
+    .press("Enter");
+  await expect(band(page)).toHaveCount(0);
+  expect(
+    (await stored(page)).find((node) => node.id === "draft")?.completed,
+  ).toBe(false);
+  expect(
+    (await stored(page)).find((node) =>
+      node.text.endsWith(": Need another pass"),
+    )?.parentId,
+  ).toBe("draft");
+  await picker(page);
+  await page
+    .getByRole("button", { name: "Start focus session", exact: true })
+    .click();
+  await placeCaret(text(page, "draft"), "end");
+  await page.keyboard.press("ControlOrMeta+Enter");
+  await expect(band(page)).toContainText("How did it go?");
+  await band(page).getByRole("button", { name: "Skip", exact: true }).click();
+  await picker(page, "other");
+  await page
+    .getByRole("button", { name: "Start focus session", exact: true })
+    .click();
+  await placeCaret(text(page, "other"), "end");
+  await page.keyboard.press("ControlOrMeta+k");
+  await page.getByPlaceholder(/Search nodes and commands/).fill("Delete");
+  await page.getByRole("option", { name: /^Delete/ }).click();
+  await expect(band(page)).toHaveCount(0);
+  await expect(
+    page.getByText("Focus session ended because the node was deleted."),
+  ).toBeVisible();
+});
+
+test("Pomodoro takes automatic breaks, waits for each round and excludes breaks from reflection", async ({
+  page,
+}) => {
+  await page.clock.install();
+  await seedOutline(page, TREE, {
+    kv: {
+      "account-prefs": [
+        {
+          key: "focus:settings",
+          value: {
+            key: "focus:settings",
+            settings: {
+              focusMinutes: 2,
+              breakMinutes: 1,
+              longBreakMinutes: 3,
+              rounds: 2,
+              sounds: false,
+            },
+          },
+        },
+      ],
+    },
+  });
+  await openSeededOutline(page, { anchorId: "draft" });
+  await picker(page);
+  await page.getByRole("button", { name: "Pomodoro", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Start focus session", exact: true })
+    .click();
+  await page.clock.fastForward(2 * 60_000);
+  await expect(band(page)).toHaveAttribute("data-focus-phase", "break");
+  await page.clock.fastForward(4 * 60_000);
+  await expect(band(page)).toHaveAttribute("data-focus-phase", "ready");
+  await band(page)
+    .getByRole("button", { name: "Start round 2", exact: true })
+    .click();
+  await page.clock.fastForward(2 * 60_000);
+  await expect(band(page)).toHaveAttribute("data-focus-phase", "break");
+  await expect(band(page).getByLabel("Focus time remaining")).toHaveText(
+    "3:00",
+  );
+  await band(page).getByRole("button", { name: "Done", exact: true }).click();
+  await band(page)
+    .getByRole("textbox", { name: "How did it go?" })
+    .fill("Two rounds");
+  await band(page)
+    .getByRole("textbox", { name: "How did it go?" })
+    .press("Enter");
+  await expect(band(page)).toHaveCount(0);
+  expect(
+    (await stored(page)).find((node) => node.text.endsWith(": Two rounds"))
+      ?.text,
+  ).toMatch(/, 4 min: Two rounds$/);
+});
+
+test("View actions target the page, hide at Home, and Locked Done cannot complete or reflect", async ({
+  page,
+}) => {
+  await page.clock.install();
+  await seedOutline(page, TREE);
+  await openSeededOutline(page, { anchorId: "draft" });
+  await page.getByRole("button", { name: "View options" }).click();
+  await expect(page.getByRole("menu", { name: "View options" })).toBeVisible();
+  await expect(
+    page.getByRole("menuitem", { name: "Focus on this page…" }),
+  ).toHaveCount(0);
+  await page.getByRole("menu", { name: "View options" }).press("Escape");
+  await expect(page.getByRole("menu", { name: "View options" })).toBeHidden();
+  await page.locator('li[data-node-id="locked"] .bullet-dot').click();
+  await page.getByRole("button", { name: "View options" }).click();
+  await page.getByRole("menuitem", { name: "Focus on this page…" }).click();
+  await expect(page.getByRole("dialog")).toContainText("Locked task");
+  await page
+    .getByRole("button", { name: "Start focus session", exact: true })
+    .click();
+  await page.clock.fastForward(61 * 60_000);
+  await band(page).getByRole("button", { name: "Done", exact: true }).click();
+  await expect(band(page)).toHaveCount(0);
+  expect(
+    (await stored(page)).find((node) => node.id === "locked")?.completed,
+  ).toBe(false);
+  await expect(
+    page.getByText(/This node is Locked and could not be checked off/),
+  ).toBeVisible();
+});
+
+test("slash start, remembered custom length, cross-tab pause, reload, extension and PiP reflection", async ({
+  page,
+}) => {
+  // Three editor loads plus Settings/PiP interactions share this one journey.
+  // Cold-shard traces spend over 20s loading those pages alone; assertions keep
+  // their normal 5s budget and this workflow still runs without retries.
+  test.setTimeout(60_000);
+  await page.clock.install();
+  const outline = await seedOutline(page, TREE);
+  await openSeededOutline(page, { anchorId: "draft" });
+  await placeCaret(text(page, "draft"), "end");
+  await page.keyboard.type(" /focus");
+  await page.getByRole("option", { name: /Focus session/ }).click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await page.getByRole("button", { name: "Custom", exact: true }).click();
+  await page
+    .getByRole("spinbutton", { name: "Minutes", exact: true })
+    .fill("1");
+  await page
+    .getByRole("button", { name: "Start focus session", exact: true })
+    .click();
+  await expect(text(page, "draft")).toHaveText(
+    "Finish the draft ||private detail||",
+  );
+
+  const other = await page.context().newPage();
+  await seedOutline(other, TREE);
+  await openSeededOutline(other, { anchorId: "draft" });
+  await expect(band(other)).toContainText("Finish the draft [spoiler]");
+  await band(other)
+    .getByRole("button", { name: "Pause focus session", exact: true })
+    .click();
+  await expect(band(page)).toContainText("Paused");
+  await page.reload();
+  // As on initial navigation, document load precedes the lazy editor and sync.
+  // Give readiness the test budget before asserting the restored session state.
+  await text(page, "draft").waitFor({ state: "visible" });
+  await expect(band(page)).toContainText("Paused");
+  await picker(page, "other");
+  await expect(
+    page.getByRole("spinbutton", { name: "Minutes", exact: true }),
+  ).toHaveValue("1");
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Close", exact: true })
+    .click();
+  await band(page)
+    .getByRole("button", { name: "Resume focus session", exact: true })
+    .click();
+  await page.clock.fastForward(61_000);
+  await band(page).getByRole("button", { name: "+5 min", exact: true }).click();
+  await expect(band(page).getByLabel("Focus time remaining")).toHaveText(
+    "5:00",
+  );
+
+  await page.clock.runFor(1000);
+  await page.evaluate(() => document.fonts.ready);
+  const popupPromise = page.context().waitForEvent("page");
+  await band(page)
+    .getByRole("button", { name: "Pop out focus session", exact: true })
+    .click();
+  const popup = await popupPromise;
+  await popup.setViewportSize({ width: 300, height: 180 });
+  const card = popup.getByRole("region", { name: "Focus card" });
+  await expect(card).toContainText("Writing");
+  await expect(card).toContainText("Finish the draft [spoiler]");
+  await expect(card).not.toContainText("private detail");
+  await expect
+    .poll(() =>
+      popup.evaluate(
+        () =>
+          document.fonts.status === "loaded" &&
+          [...document.fonts].some(
+            (face) =>
+              face.family === "Geist Variable" && face.status === "loaded",
+          ),
+      ),
+    )
+    .toBe(true);
+  await card
+    .getByRole("button", { name: "Pause focus session", exact: true })
+    .click();
+  await expect(band(page)).toContainText("Paused");
+  await page.getByRole("button", { name: "Account and help" }).click();
+  await page.getByRole("menuitem", { name: "Settings", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Settings", exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Focus sessions options", exact: true })
+    .click();
+  // A length saves when its field is left; Enter leaves it.
+  await page
+    .getByRole("spinbutton", { name: "Focus minutes", exact: true })
+    .fill("3");
+  await page
+    .getByRole("spinbutton", { name: "Focus minutes", exact: true })
+    .press("Enter");
+  await page.getByRole("switch", { name: "Sounds", exact: true }).click();
+  await expect(
+    page.getByRole("switch", { name: "Sounds", exact: true }),
+  ).not.toBeChecked();
+  await card
+    .getByRole("button", { name: "Back to focus", exact: true })
+    .click();
+  await expect(page).toHaveURL(/\/draft$/);
+  await expect(page.getByLabel("Title", { exact: true })).toBeFocused();
+  await card
+    .getByRole("button", { name: "Resume focus session", exact: true })
+    .click();
+  await page.clock.fastForward(301_000);
+  await card.getByRole("button", { name: "Done", exact: true }).click();
+  await card
+    .getByRole("textbox", { name: "How did it go?" })
+    .fill("Saved from the floating card");
+  await card.getByRole("textbox", { name: "How did it go?" }).press("Enter");
+  await expect(band(page)).toHaveCount(0);
+  expect(
+    (await stored(page)).find((node) =>
+      node.text.endsWith(": Saved from the floating card"),
+    )?.parentId,
+  ).toBe("draft");
+  await picker(page, "child");
+  await page
+    .getByRole("button", { name: "Start focus session", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Account and help" }).click();
+  await page.getByRole("menuitem", { name: "Settings", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Settings", exact: true }),
+  ).toBeVisible();
+  await outline.injectExternalChange([{ op: "delete", key: "child" }]);
+  await expect(card).toHaveCount(0);
+  await expect(
+    popup.getByText("No focus session", { exact: true }),
+  ).toBeVisible();
+  await popup.close();
+  await other.close();
+  await page.goto("/settings#focus");
+  await page.getByRole("heading", { name: "Settings", level: 1 }).waitFor();
+  await expect(
+    page.getByRole("spinbutton", { name: "Focus minutes", exact: true }),
+  ).toHaveValue("3");
+  await expect(
+    page.getByRole("switch", { name: "Sounds", exact: true }),
+  ).not.toBeChecked();
+});
+
+test("turning Focus sessions off lets a running session go and hides its commands", async ({
+  page,
+}) => {
+  await seedOutline(page, TREE);
+  await openSeededOutline(page, { anchorId: "draft" });
+  await picker(page);
+  await page
+    .getByRole("button", { name: "Start focus session", exact: true })
+    .click();
+  await expect(band(page)).toContainText("Finish the draft");
+  const action = async (label: string) => {
+    await page.keyboard.press("ControlOrMeta+k");
+    await page.getByPlaceholder(/Search nodes and commands/).fill(label);
+    await page.getByRole("option", { name: label }).click();
+  };
+  await action("Turn off Focus sessions");
+  await expect(band(page)).toHaveCount(0);
+  await expect(
+    page.getByRole("img", { name: "Active focus session" }),
+  ).toHaveCount(0);
+  await placeCaret(text(page, "draft"), "end");
+  await page.keyboard.press("ControlOrMeta+k");
+  await page
+    .getByPlaceholder(/Search nodes and commands/)
+    .fill("Focus session");
+  await expect(
+    page.getByRole("option", { name: /Focus session…/ }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("option", { name: "Turn on Focus sessions" }),
+  ).toBeVisible();
+  await page.getByRole("option", { name: "Turn on Focus sessions" }).click();
+  await placeCaret(text(page, "draft"), "end");
+  await page.keyboard.press("ControlOrMeta+k");
+  await page
+    .getByPlaceholder(/Search nodes and commands/)
+    .fill("Focus session");
+  await expect(
+    page.getByRole("option", { name: /Focus session…/ }),
+  ).toBeVisible();
+  await page.keyboard.press("Escape");
+  // The session ended rather than hiding, so turning back on shows none.
+  await expect(band(page)).toHaveCount(0);
+});
+
+test("a session left in this browser ends when Focus sessions loads already off", async ({
+  page,
+}) => {
+  await seedOutline(page, TREE);
+  await openSeededOutline(page, { anchorId: "draft" });
+  await picker(page);
+  await page
+    .getByRole("button", { name: "Start focus session", exact: true })
+    .click();
+  await expect(band(page)).toContainText("Finish the draft");
+  // Another device turns Focus off. This browser next loads Settings, where
+  // no editor (and so no Focus band) ever mounts.
+  const prefs = (url: URL) =>
+    url.pathname === "/api/kv" &&
+    url.searchParams.get("collection") === "account-prefs";
+  await page.route(prefs, (route) =>
+    route.request().method() === "GET"
+      ? route.fulfill({
+          json: [{ key: "editor-feature:focus", enabled: false }],
+        })
+      : route.fallback(),
+  );
+  await page.goto("/settings");
+  await expect(
+    page.getByRole("switch", { name: "Focus sessions", exact: true }),
+  ).not.toBeChecked({ timeout: 15000 });
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        Object.keys(localStorage).filter((key) =>
+          key.startsWith("dotflowy:focus:"),
+        ),
+      ),
+    )
+    .toEqual([]);
+  // Turning Focus back on must not revive the old session.
+  await page.unroute(prefs);
+  await openSeededOutline(page, { anchorId: "draft" });
+  await expect(band(page)).toHaveCount(0);
+});
+
+test("Tab moves between Focus lengths while the previous one saves", async ({
+  page,
+}) => {
+  await seedOutline(page, TREE);
+  await page.goto("/settings#focus");
+  const focus = page.getByRole("spinbutton", {
+    name: "Focus minutes",
+    exact: true,
+  });
+  const pause = page.getByRole("spinbutton", {
+    name: "Break minutes",
+    exact: true,
+  });
+  await expect(focus).toBeEnabled({ timeout: 15000 });
+  await focus.fill("30");
+  await page.keyboard.press("Tab");
+  await expect(pause).toBeFocused();
+  await page.keyboard.press("ArrowUp");
+  await expect(pause).toHaveValue("6");
+});
+
+test("a rejected Focus sessions off-save keeps the running session", async ({
+  page,
+}) => {
+  await seedOutline(page, TREE);
+  await openSeededOutline(page, { anchorId: "draft" });
+  await picker(page);
+  await page
+    .getByRole("button", { name: "Start focus session", exact: true })
+    .click();
+  await expect(band(page)).toContainText("Finish the draft");
+  let markSaveSeen!: () => void;
+  const saveSeen = new Promise<void>((resolve) => {
+    markSaveSeen = resolve;
+  });
+  let releaseSave!: () => void;
+  const saveReleased = new Promise<void>((resolve) => {
+    releaseSave = resolve;
+  });
+  await page.route(
+    (url) =>
+      url.pathname === "/api/kv" &&
+      url.searchParams.get("collection") === "account-prefs",
+    async (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      markSaveSeen();
+      await saveReleased;
+      await route.fulfill({ status: 400, json: { error: "Rejected save" } });
+    },
+  );
+  await page.keyboard.press("ControlOrMeta+k");
+  await page
+    .getByPlaceholder(/Search nodes and commands/)
+    .fill("Turn off Focus sessions");
+  await page.getByRole("option", { name: "Turn off Focus sessions" }).click();
+  await saveSeen;
+  try {
+    // Resolve the same account lookup used when ending a session. The held save,
+    // not an arbitrary delay, must prevent that irreversible operation.
+    expect(
+      await page.evaluate(async () => {
+        const path = "/src/lib/auth-client.ts";
+        const { data } = await (await import(path)).getSession();
+        return data?.user.id;
+      }),
+    ).toBe("test-user");
+    expect(
+      await page.evaluate(() =>
+        Object.keys(localStorage).filter((key) =>
+          key.startsWith("dotflowy:focus:"),
+        ),
+      ),
+    ).toHaveLength(1);
+  } finally {
+    releaseSave();
+  }
+  await expect(
+    page.getByText("Couldn't save this setting. Try again."),
+  ).toBeVisible();
+  await expect(band(page)).toContainText("Finish the draft");
+  expect(
+    await page.evaluate(() =>
+      Object.keys(localStorage).filter((key) =>
+        key.startsWith("dotflowy:focus:"),
+      ),
+    ),
+  ).toHaveLength(1);
+});
+
+test("a focus sound starts with the session, follows pause, switches, stops, and is remembered", async ({
+  page,
+}) => {
+  // Two tabs, a PiP window, and a timed session share this one journey, like
+  // the PiP reflection journey above; assertions keep their 5s budget.
+  test.setTimeout(60_000);
+  // Record each focus sound loop so the test can tell what is sounding: the
+  // looped buffer's length names the sound, its context's state says whether
+  // audio is coming out. Focus sounds ask for a "playback" context; the
+  // Cuelume cues use their own, and the time-up cue also loops.
+  await page.addInitScript(() => {
+    const loops: AudioBufferSourceNode[] = [];
+    const playback = new WeakSet<BaseAudioContext>();
+    const Context = AudioContext;
+    globalThis.AudioContext = class extends Context {
+      constructor(options?: AudioContextOptions) {
+        super(options);
+        if (options?.latencyHint === "playback") playback.add(this);
+      }
+    };
+    const start = AudioBufferSourceNode.prototype.start;
+    AudioBufferSourceNode.prototype.start = function (...args) {
+      if (this.loop && playback.has(this.context)) loops.push(this);
+      return start.apply(this, args);
+    };
+    Object.assign(globalThis, {
+      focusAudio: () => {
+        const last = loops.at(-1);
+        return last
+          ? `${last.context.state} ${last.buffer?.duration}s`
+          : "silent";
+      },
+    });
+  });
+  const audio = () => page.evaluate<string>("focusAudio()");
+  await seedOutline(page, TREE);
+  await openSeededOutline(page, { anchorId: "draft" });
+
+  await picker(page);
+  const dialog = page.getByRole("dialog", { name: "Focus session" });
+  await dialog.getByRole("button", { name: "Rain", exact: true }).click();
+  await dialog
+    .getByRole("button", { name: "Start focus session", exact: true })
+    .click();
+  await expect(
+    band(page).getByRole("button", { name: "Pause Rain", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  // Rain is a 20-second loop.
+  await expect.poll(audio).toBe("running 20s");
+
+  await band(page)
+    .getByRole("button", { name: "Pause focus session", exact: true })
+    .click();
+  await expect.poll(audio).toBe("suspended 20s");
+  await band(page)
+    .getByRole("button", { name: "Resume focus session", exact: true })
+    .click();
+  await expect.poll(audio).toBe("running 20s");
+
+  await band(page)
+    .getByRole("button", { name: "Choose focus sound", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Clock tick", exact: true }).click();
+  await page.keyboard.press("Escape");
+  // The clock ticks once a second, so its loop is one second long.
+  await expect.poll(audio).toBe("running 1s");
+  await band(page)
+    .getByRole("button", { name: "Pause Clock tick", exact: true })
+    .click();
+  await expect(
+    band(page).getByRole("button", { name: "Play Clock tick", exact: true }),
+  ).toHaveAttribute("aria-pressed", "false");
+  await expect.poll(audio).toBe("suspended 1s");
+
+  await band(page)
+    .getByRole("button", { name: "End focus session", exact: true })
+    .click();
+  await band(page).getByRole("button", { name: "Skip", exact: true }).click();
+  await expect(band(page)).toHaveCount(0);
+
+  // The picker remembers the last sound, and Off starts a silent session.
+  await picker(page);
+  await expect(
+    dialog.getByRole("button", { name: "Clock tick", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await dialog.getByRole("button", { name: "Off", exact: true }).click();
+  await dialog
+    .getByRole("button", { name: "Start focus session", exact: true })
+    .click();
+  await expect(
+    band(page).getByRole("button", { name: "Play Clock tick", exact: true }),
+  ).toBeVisible();
+  await expect.poll(audio).toBe("suspended 1s");
+
+  // A session started in another tab with Sound Off silences this tab.
+  await band(page)
+    .getByRole("button", { name: "Play Clock tick", exact: true })
+    .click();
+  await expect.poll(audio).toBe("running 1s");
+  const other = await page.context().newPage();
+  await seedOutline(other, TREE);
+  await openSeededOutline(other, { anchorId: "other" });
+  await picker(other, "other");
+  const otherDialog = other.getByRole("dialog", { name: "Focus session" });
+  await otherDialog.getByRole("button", { name: "Off", exact: true }).click();
+  await otherDialog
+    .getByRole("button", { name: "Start focus session", exact: true })
+    .click();
+  await expect(band(page)).toContainText("Other work");
+  await expect.poll(audio).toBe("suspended 1s");
+  await expect(
+    band(page).getByRole("button", { name: "Play Clock tick", exact: true }),
+  ).toBeVisible();
+  await other.close();
+
+  // At time is up the sound goes quiet, and the floating window can still
+  // play and pause it in overtime.
+  await picker(page);
+  await dialog.getByRole("button", { name: "Custom", exact: true }).click();
+  await dialog
+    .getByRole("spinbutton", { name: "Minutes", exact: true })
+    .fill("0.1");
+  await dialog.getByRole("button", { name: "Clock tick", exact: true }).click();
+  await dialog
+    .getByRole("button", { name: "Start focus session", exact: true })
+    .click();
+  await expect.poll(audio).toBe("running 1s");
+  // The band offers Pop out only while time runs.
+  const popupPromise = page.context().waitForEvent("page");
+  await band(page)
+    .getByRole("button", { name: "Pop out focus session", exact: true })
+    .click();
+  const popup = await popupPromise;
+  await popup.setViewportSize({ width: 300, height: 180 });
+  const card = popup.getByRole("region", { name: "Focus card" });
+  await expect(card).toContainText("Time is up", { timeout: 10_000 });
+  await expect.poll(audio).toBe("suspended 1s");
+  await card
+    .getByRole("button", { name: "Play Clock tick", exact: true })
+    .click();
+  await expect.poll(audio).toBe("running 1s");
+  await card
+    .getByRole("button", { name: "Pause Clock tick", exact: true })
+    .click();
+  await expect.poll(audio).toBe("suspended 1s");
+});

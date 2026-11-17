@@ -1,0 +1,9 @@
+{
+  // Typechecks Playwright specs and fixtures separately from the browser app.
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"],
+    "noEmit": true
+  },
+  "include": [".", "../playwright.config.ts", "../src/vite-env.d.ts"]
+}

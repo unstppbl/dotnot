@@ -1,0 +1,140 @@
+import { Fragment, useEffect, useRef, useState } from "react";
+
+import { MoreIcon } from "@/lib/icons";
+
+import type { Node } from "../data/tree";
+import type { PluginContext, SlotPosition } from "../plugins/types";
+
+import { flattenNodeText } from "../data/node-links";
+import { getTreeIndex } from "../data/tree-store";
+import { slotsAt } from "../plugins/registry";
+import { SheetHeader, SheetTitle } from "./ui/sheet";
+
+type AfterTextPosition = Extract<
+  SlotPosition,
+  "row:after-text" | "title:after-text"
+>;
+
+/**
+ * The default target of the overflow affordance (ADR 0031, step 03): the node's
+ * decorations rendered UNCLIPPED in the Tier-3 side panel. Where the budget hid
+ * things, this shows the full set. Deliberately minimal -- a header with the
+ * node's (flattened) text plus every trailing slot -- and grows as real
+ * consumers arrive.
+ */
+function NodeOverflowPanel({
+  node,
+  position,
+  getCtx,
+}: {
+  node: Node;
+  position: AfterTextPosition;
+  getCtx: () => PluginContext;
+}) {
+  const slots = slotsAt(position);
+  return (
+    <>
+      <SheetHeader>
+        <SheetTitle>
+          {flattenNodeText(getTreeIndex(), node.text) || "Untitled"}
+        </SheetTitle>
+      </SheetHeader>
+      <div className="flex flex-wrap items-center gap-2 px-4 pb-4">
+        {slots.map((slot) => (
+          <Fragment key={slot.id}>{slot.render(node, getCtx)}</Fragment>
+        ))}
+      </div>
+    </>
+  );
+}
+
+/**
+ * The trailing node-decoration zone (Seam F `*:after-text` -- ADR 0031, the
+ * anti-ugly node budget). A plugin's rich decorations render at the row's
+ * trailing edge, but the CORE caps how much of the bullet they may occupy: the
+ * zone is clipped to `--node-deco-budget` (styles.css) and, when the content
+ * exceeds it, a trailing fade + an overflow affordance signal "there's more".
+ * Freedom is capped by SPACE, not vocabulary -- an author uses any component
+ * they like; the outline surface still can't be crowded out.
+ *
+ * Overflow is detected as a BOOLEAN, never a per-child count. A count would need
+ * per-decoration width math and would flicker as async widgets (favicons,
+ * avatars) settle; a boolean just flips once when content crosses the budget.
+ * One `ResizeObserver` watches the content track (its width changes when a
+ * decoration loads in) AND the zone (its width changes when a narrow viewport
+ * squeezes the row) -- but NOT scroll: the windowed row's `translateY`
+ * reposition resizes neither element, so the observer stays silent on the hot
+ * path (ADR 0019 / ADR 0014).
+ *
+ * Rendered as spans (not divs) so the same component is valid inside both render
+ * paths -- the list row's `<li>` and the zoomed title's phrasing-only `<h2>`.
+ *
+ * Focus's remaining-time pie is the first `*:after-text` consumer (ADR 0074).
+ * With no registered slots, the component returns null with no observer cost.
+ */
+export function NodeDecorations({
+  node,
+  position,
+  getCtx,
+}: {
+  node: Node;
+  position: AfterTextPosition;
+  /** The stable PluginContext factory the row passes everywhere. */
+  getCtx: () => PluginContext;
+}) {
+  // The compiled-in slot roster is stable. Empty positions pay no zone or
+  // observer cost; a registered component may itself render null while idle.
+  const slots = slotsAt(position);
+  const hasSlots = slots.length > 0;
+
+  const zoneRef = useRef<HTMLSpanElement | null>(null);
+  const trackRef = useRef<HTMLSpanElement | null>(null);
+  const [overflowing, setOverflowing] = useState(false);
+
+  useEffect(() => {
+    const zone = zoneRef.current;
+    const track = trackRef.current;
+    if (!zone || !track) return;
+    const measure = () => {
+      // +1 absorbs sub-pixel rounding so a flush fit isn't read as overflow.
+      const next = track.offsetWidth > zone.clientWidth + 1;
+      setOverflowing((prev) => (prev === next ? prev : next));
+    };
+    const ro = new ResizeObserver(measure);
+    ro.observe(zone);
+    ro.observe(track);
+    measure();
+    return () => ro.disconnect();
+  }, [hasSlots]);
+
+  if (!hasSlots) return null;
+
+  const handleExpand = () =>
+    getCtx().openPanel(
+      <NodeOverflowPanel node={node} position={position} getCtx={getCtx} />,
+    );
+
+  return (
+    <span className="node-deco" data-overflowing={overflowing || undefined}>
+      <span className="node-deco-zone" ref={zoneRef}>
+        <span className="node-deco-track" ref={trackRef}>
+          {slots.map((slot) => (
+            <Fragment key={slot.id}>{slot.render(node, getCtx)}</Fragment>
+          ))}
+        </span>
+      </span>
+      {overflowing && (
+        <button
+          type="button"
+          className="node-deco-more touch-hitbox"
+          aria-label="Show all decorations"
+          title="Show all"
+          onClick={handleExpand}
+          tabIndex={-1}
+        >
+          <MoreIcon size={14} />
+        </button>
+      )}
+    </span>
+  );
+}

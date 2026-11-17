@@ -1,0 +1,659 @@
+import {
+  expect,
+  type Locator,
+  type Page,
+  type Route,
+  type WebSocketRoute,
+} from "@playwright/test";
+import { Schema } from "effect";
+
+import type {
+  Node as ApiNode,
+  ChangeOp as ApiChangeOp,
+} from "../src/data/wire-schema";
+
+import {
+  KvClaimBody,
+  KvDeleteBody,
+  KvUpsertBody,
+  NodesDeleteBody,
+  NodesPatchBody,
+  NodesPostBody,
+  WeekStartPostBody,
+} from "../worker/wire";
+
+/** A node's editable text in the outline list (not the zoomed page title). */
+export const text = (page: Page, id: string): Locator =>
+  page.locator(`li[data-node-id="${id}"] > .outline-row .node-text`);
+
+/** Find's search input (ADR 0083, 0089): the one search box. */
+export const findInput = (page: Page): Locator =>
+  page.getByRole("combobox", { name: "Find nodes and actions" });
+
+/** The applied-filter pill in the subheader (ADR 0089). */
+export const filterPill = (page: Page): Locator =>
+  page.locator("[data-filter-pill]");
+
+/** Filter the current view the way a person does (ADR 0089): Cmd+F opens Find
+ *  on this node, type the query, Shift+Enter shows the matches in the outline.
+ *  An empty query clears the filter through the pill's X. */
+export async function applyFilter(page: Page, query: string): Promise<void> {
+  if (!query.trim()) {
+    await page.getByRole("button", { name: "Clear filter" }).click();
+    await expect(page).not.toHaveURL(/[?&]q=/);
+    return;
+  }
+  await page.keyboard.press("ControlOrMeta+f");
+  await expect(findInput(page)).toBeFocused();
+  await findInput(page).fill(query);
+  await findInput(page).press("Shift+Enter");
+  await expect(findInput(page)).toHaveCount(0);
+  await expect
+    .poll(() => new URL(page.url()).searchParams.get("q"))
+    .toBe(query.trim());
+}
+
+/** Desktop browser engines cannot open a software keyboard. Model its viewport
+ * reduction explicitly for toolbar journeys; this is not native-device proof. */
+export async function mockKeyboardViewport(page: Page) {
+  await page.addInitScript(() => {
+    if (!window.visualViewport) return;
+    Object.defineProperty(window.visualViewport, "height", {
+      configurable: true,
+      get: () => window.innerHeight - 300,
+    });
+  });
+}
+
+/**
+ * Focus `target` and collapse the caret at a source offset, or at either edge.
+ * Set the Selection directly instead of pressing Home/End or clicking at a
+ * pixel: those depend on visual lines and hit-testing. An atom (an element with
+ * `data-src`, such as a date or link chip) counts as its source length, and an
+ * offset inside one snaps to its leading edge at 0 and its trailing edge
+ * otherwise. An offset past the end lands at the end.
+ */
+export async function placeCaret(
+  target: Locator,
+  at: number | "start" | "end",
+): Promise<void> {
+  await target.evaluate((el: HTMLElement, at) => {
+    el.focus();
+    const sel = window.getSelection()!;
+    const place = (range: Range) => {
+      sel.removeAllRanges();
+      sel.addRange(range);
+    };
+    const edge = (atEnd: boolean) => {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      range.collapse(!atEnd);
+      place(range);
+    };
+    if (at === "start" || at === "end") return edge(at === "end");
+    let remaining = at;
+    const visit = (node: Node): boolean => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        const len = node.textContent?.length ?? 0;
+        if (remaining > len) {
+          remaining -= len;
+          return false;
+        }
+        const range = document.createRange();
+        range.setStart(node, remaining);
+        range.collapse(true);
+        place(range);
+        return true;
+      }
+      if (node instanceof Element && node.hasAttribute("data-src")) {
+        const len =
+          Number(node.getAttribute("data-src-len")) ||
+          (node.getAttribute("data-src") ?? "").length;
+        if (remaining >= len) {
+          remaining -= len;
+          return false;
+        }
+        const parent = node.parentNode!;
+        const index = Array.prototype.indexOf.call(parent.childNodes, node);
+        const range = document.createRange();
+        range.setStart(parent, remaining === 0 ? index : index + 1);
+        range.collapse(true);
+        place(range);
+        return true;
+      }
+      return Array.from(node.childNodes).some(visit);
+    };
+    if (!visit(el)) edge(true);
+  }, at);
+}
+
+/** Hold Daily's real claim boundary to exercise capture before its destination exists. */
+export async function holdDailyClaims(page: Page) {
+  let release!: () => void;
+  let markSeen!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const seen = new Promise<void>((resolve) => {
+    markSeen = resolve;
+  });
+  await page.route(
+    (url) =>
+      url.pathname === "/api/kv" &&
+      url.searchParams.get("collection") === "daily-index" &&
+      url.searchParams.get("op") === "claim",
+    async (route) => {
+      if (route.request().method() === "POST") {
+        markSeen();
+        await held;
+      }
+      await route.fallback();
+    },
+  );
+  return { seen, release };
+}
+
+/** Open a seeded Classic outline. */
+export async function openSeededOutline(
+  page: Page,
+  opts: { path?: string; anchorId?: string } = {},
+): Promise<void> {
+  await page.goto(opts.path ?? "/");
+  // The document load finishes before the lazy editor graph and initial sync.
+  // Wait for this page's outline within the test budget, not an interaction's
+  // 5s assertion budget. A cold dev server can still be compiling at that point.
+  const ready = opts.anchorId
+    ? page.locator(
+        `li[data-node-id="${opts.anchorId}"] > .outline-row .node-text`,
+      )
+    : page.locator(".outline-list");
+  await ready.waitFor({ state: "visible" });
+}
+
+/**
+ * The outline fades in and rises 4px when it replaces the loading skeleton
+ * (`.outline-reveal` in styles.css). A position read during that entrance is
+ * not the resting position. Call this before you record geometry to compare
+ * against later.
+ */
+export async function outlineRevealed(page: Page): Promise<void> {
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        document
+          .getAnimations()
+          .some(
+            (animation) =>
+              animation instanceof CSSAnimation &&
+              animation.animationName === "outline-reveal" &&
+              animation.playState !== "finished",
+          ),
+      ),
+    )
+    .toBe(false);
+}
+
+// A node as the test author cares about it -- structural fields only. Everything
+// the schema also requires (isTask/completed/collapsed/timestamps) is filled in
+// with inert defaults by seedOutline so each test only states what matters.
+export interface SeedNode {
+  id: string;
+  parentId: string | null;
+  prevSiblingId: string | null;
+  text: string;
+  collapsed?: boolean;
+  completed?: boolean;
+  isTask?: boolean;
+  /** Epoch ms when bookmarked; omit/null for an un-bookmarked node. */
+  bookmarkedAt?: number | null;
+  /** Direct owner lock; descendant lock state is derived by the app. */
+  locked?: boolean;
+  /** Source node id this is a mirror of (ADR 0022); omit/null for a normal node. */
+  mirrorOf?: string | null;
+  /** Provenance: agent harness name if created via MCP; omit/null for human. */
+  origin?: string | null;
+  /** Node kind (ADR 0045); omit/null for a bullet-or-task. */
+  kind?: ApiNode["kind"];
+  /** Optional timestamp for benchmark controls; ordinary tests default to zero. */
+  updatedAt?: number;
+}
+
+export type { ApiNode, ApiChangeOp };
+
+function toNode(n: SeedNode): ApiNode {
+  return {
+    id: n.id,
+    parentId: n.parentId,
+    prevSiblingId: n.prevSiblingId,
+    text: n.text,
+    isTask: n.isTask ?? false,
+    completed: n.completed ?? false,
+    collapsed: n.collapsed ?? false,
+    bookmarkedAt: n.bookmarkedAt ?? null,
+    locked: n.locked ?? false,
+    mirrorOf: n.mirrorOf ?? null,
+    createdAt: 0,
+    updatedAt: n.updatedAt ?? 0,
+    origin: n.origin ?? null,
+    kind: n.kind ?? null,
+  };
+}
+
+export interface SeedOutlineController {
+  /** Commit and broadcast a change not made by this page. */
+  injectExternalChange(ops: readonly ApiChangeOp[]): Promise<number>;
+  /** Reconcile the socket, optionally replacing server truth without deltas. */
+  sendSnapshot(nodes?: readonly ApiNode[]): void;
+  /** Hold initial/reconnect snapshots until the returned release runs. */
+  holdSnapshots(): () => void;
+  /** Reject the next structural REST write before it mutates the store. */
+  failNextWrite(): void;
+}
+
+/**
+ * Seed a known outline by intercepting the `/api/nodes` Worker and `/api/sync`
+ * WebSocket with in-memory mocks, so the app's custom-sync collection loads
+ * exactly this tree and the editor's seed-if-empty effect sees a non-empty store
+ * and stays out of the way.
+ *
+ * The app reads nodes over a WebSocket (`/api/sync`), not a GET — writes still
+ * ride the REST mock below. This mirrors `worker/index.ts`'s contract:
+ *   - GET/POST/PATCH/DELETE `/api/nodes` — mutation path (unchanged)
+ *   - WS `/api/sync` — `hello` → `snapshot` from the seeded store
+ * so the real `collection.ts` → `api.ts` + `realtime.ts` path is exercised end
+ * to end; only the DO is swapped for a Map. Real-Worker SQL and HTTP workflows
+ * live in `worker/capture-real.test.ts`, not this browser fixture.
+ *
+ * The store is scoped to this test's `page`. Playwright gives each test its own
+ * page/context, so two tests never share state. Register before `page.goto(...)`
+ * (every spec does) so the collection's first sync is mocked.
+ *
+ */
+export async function seedOutline(
+  page: Page,
+  nodes: SeedNode[],
+  opts: {
+    echoDelayMs?: number;
+    postDelayMs?: number;
+    /** Split a structural batch's echo into N frames (chunked ops, consecutive
+     *  seqs, staggered by echoDelayMs each), replying with the FINAL seq —
+     *  mirrors the DO's chunked recordChange (worker/outline-do.ts, issue
+     *  #124), which commits a >500-op batch as multiple consecutive-seq
+     *  changelog rows and echoes them as multiple frames. */
+    echoChunks?: number;
+    /** Pre-seed plugin side-collections, keyed by collection namespace (e.g.
+     *  `"daily-index"`). Each row is stored as `key -> value` exactly as a write
+     *  would land, so the app's first GET returns it. Lets a spec start with a
+     *  side-collection already populated (e.g. an existing Daily container) to
+     *  exercise the async-load path that a fresh, navigation-free load hits. */
+    kv?: Record<string, { key: string; value: unknown }[]>;
+    /** Stamp `serverVersion` onto the `snapshot` frame, as the real DO does
+     *  (ADR 0046). Omitted by default, which is faithful to a DO that predates
+     *  the field AND keeps every other spec free of an update toast; pass a
+     *  version different from package.json's to exercise the stale-tab path. */
+    serverVersion?: string;
+    /** Force every structural-batch POST (`body.ops`) to fail with a 500 before
+     *  it mutates the store, so a spec can drive the save-failure rollback +
+     *  toast path (#230). Reads and the legacy seed POST are untouched, so the
+     *  seeded outline still loads normally. A received 500 resolves the fetch
+     *  (not a transport error), so the client's retry policy doesn't kick in —
+     *  the failure lands immediately. */
+    failStructuralWrites?: boolean;
+  } = {},
+): Promise<SeedOutlineController> {
+  const echoDelayMs = opts.echoDelayMs ?? 0;
+  // Delay only the structural-batch POST *response* (not its echo). Opens a
+  // window to prove the client serializes batches: a second batch must not be
+  // in flight until the first response lands. Mirrors a slow DO round-trip.
+  const postDelayMs = opts.postDelayMs ?? 0;
+  const store = new Map<string, ApiNode>();
+  for (const n of nodes) store.set(n.id, toNode(n));
+
+  // Realtime-faithful mock of the DO: every mutation commits a monotonic change
+  // frame and is broadcast back. We mirror that -- each write bumps `seq`,
+  // applies to `store`, and echoes a `change` frame over the open sync socket,
+  // optionally after `echoDelayMs` (which reproduces the gap between an op's HTTP
+  // response and its WS echo). The structural batch path additionally returns its
+  // seq so the client can hold its optimistic overlay until the echo lands.
+  let seq = 0;
+  let socket: WebSocketRoute | null = null;
+  let snapshotGate: Promise<void> | null = null;
+  const broadcast = (
+    ops: readonly ApiChangeOp[],
+    extraDelayMs = 0,
+    clientId?: string,
+  ): number => {
+    seq += 1;
+    const at = seq;
+    const frame = JSON.stringify(
+      clientId === undefined
+        ? { type: "change", seq: at, ops }
+        : { type: "change", seq: at, ops, clientId },
+    );
+    const deliver = () => socket?.send(frame);
+    const delay = echoDelayMs + extraDelayMs;
+    if (delay > 0) setTimeout(deliver, delay);
+    else deliver();
+    return at;
+  };
+  const echoChunks = opts.echoChunks ?? 1;
+  let failNextStructuralWrite = false;
+
+  const reply = <T>(route: Route, data: T) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(data),
+    });
+
+  // Unconfigured deployments do not load Amp. Widget-specific journeys can
+  // override this route after seeding without contacting an external service.
+  await page.route("**/api/feedback-widget", (route) =>
+    route.fulfill({ status: 404, json: { error: "not found" } }),
+  );
+
+  await page.route("**/api/membership", (route) =>
+    reply(route, { plan: "free", legacyLeaf: false, subs: [], welcome: null }),
+  );
+  await page.route("**/api/mcp-connections", (route) =>
+    reply(route, { connections: [] }),
+  );
+  // An ordinary account. Admin journeys override this after seeding.
+  await page.route("**/api/account-capabilities", (route) =>
+    reply(route, { admin: false }),
+  );
+
+  // The app is gated behind a Better Auth session (root AuthGate). The editor
+  // only mounts once `useSession()` resolves to a session, so mock the
+  // get-session endpoint with a fixed authed user. Without this the specs would
+  // see the login screen instead of the outline. (Auth itself is verified
+  // live against `wrangler dev`, not here.)
+  await page.route(
+    (url) => url.pathname === "/api/auth/get-session",
+    (route) =>
+      reply(route, {
+        session: {
+          id: "test-session",
+          userId: "test-user",
+          token: "test-token",
+          expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+        },
+        user: {
+          id: "test-user",
+          email: "test@example.com",
+          name: "Test User",
+          emailVerified: true,
+          createdAt: new Date(0).toISOString(),
+          updatedAt: new Date(0).toISOString(),
+        },
+      }),
+  );
+
+  await page.route(
+    (url) => url.pathname === "/api/nodes",
+    async (route) => {
+      const req = route.request();
+      switch (req.method()) {
+        case "GET":
+          return reply(route, [...store.values()]);
+        case "POST": {
+          const body = Schema.decodeUnknownSync(NodesPostBody)(
+            req.postDataJSON(),
+          );
+          // Atomic structural batch: apply every op, commit ONE frame, reply with
+          // its seq (mirrors the DO's applyBatch -> { seq }).
+          if (body.ops) {
+            if (body.expectedSeq !== undefined && body.expectedSeq !== seq) {
+              return route.fulfill({
+                status: 409,
+                contentType: "application/json",
+                body: JSON.stringify({ error: "stale_outline" }),
+              });
+            }
+            // Injected failure (#230): reject the batch BEFORE touching the
+            // store, so the optimistic overlay rolls back and the save-failure
+            // toast fires.
+            if (opts.failStructuralWrites || failNextStructuralWrite) {
+              failNextStructuralWrite = false;
+              return route.fulfill({
+                status: 500,
+                contentType: "application/json",
+                body: JSON.stringify({ error: "boom" }),
+              });
+            }
+            for (const op of body.ops) {
+              if (op.op === "delete") store.delete(op.key);
+              else store.set(op.value.id, op.value);
+            }
+            let at: number;
+            if (echoChunks > 1 && body.ops.length > 1) {
+              const size = Math.ceil(body.ops.length / echoChunks);
+              at = 0;
+              for (let i = 0; i * size < body.ops.length; i++) {
+                at = broadcast(
+                  body.ops.slice(i * size, (i + 1) * size),
+                  i * echoDelayMs,
+                  body.clientId,
+                );
+              }
+            } else {
+              at = broadcast(body.ops, 0, body.clientId);
+            }
+            if (postDelayMs > 0) {
+              await new Promise((r) => setTimeout(r, postDelayMs));
+            }
+            return reply(route, { seq: at });
+          }
+          // Legacy upsert path (the first-run seed).
+          const ops: ApiChangeOp[] = (body.nodes ?? []).map((n) => ({
+            op: "insert",
+            value: n,
+          }));
+          for (const n of body.nodes ?? []) store.set(n.id, n);
+          if (ops.length) broadcast(ops, 0, body.clientId);
+          return reply(route, { ok: true });
+        }
+        case "PATCH": {
+          const { updates, clientId } = Schema.decodeUnknownSync(
+            NodesPatchBody,
+          )(req.postDataJSON());
+          const ops: ApiChangeOp[] = [];
+          for (const u of updates ?? []) {
+            const cur = store.get(u.id);
+            if (cur) {
+              const next = { ...cur, ...u.changes };
+              store.set(u.id, next);
+              ops.push({ op: "update", value: next });
+            }
+          }
+          if (ops.length) broadcast(ops, 0, clientId);
+          return reply(route, { ok: true, seq });
+        }
+        case "DELETE": {
+          const { ids, clientId } = Schema.decodeUnknownSync(NodesDeleteBody)(
+            req.postDataJSON(),
+          );
+          const ops: ApiChangeOp[] = [];
+          for (const id of ids ?? []) {
+            store.delete(id);
+            ops.push({ op: "delete", key: id });
+          }
+          if (ops.length) broadcast(ops, 0, clientId);
+          return reply(route, { ok: true });
+        }
+        default:
+          return route.fulfill({ status: 405, body: "{}" });
+      }
+    },
+  );
+
+  // The plugin side-collections (tag colors, daily index) are now D1-backed too
+  // (ADR 0024), so every spec's app load GETs /api/kv per collection and the
+  // daily specs WRITE through it (a failed write would roll back the optimistic
+  // insert). Mock the generic kv store per collection namespace, starting empty.
+  const kv = new Map<string, Map<string, unknown>>();
+  for (const [collection, rows] of Object.entries(opts.kv ?? {})) {
+    const m = new Map<string, unknown>();
+    for (const r of rows) m.set(r.key, r.value);
+    kv.set(collection, m);
+  }
+  const ns = (collection: string) => {
+    let m = kv.get(collection);
+    if (!m) kv.set(collection, (m = new Map()));
+    return m;
+  };
+
+  // Legacy accounts canonicalize their effective Monday default through the
+  // same authoritative endpoint used to switch to Sunday. Most editor specs
+  // have no Calendar scaffold to migrate, so mirror the endpoint's preference
+  // write and sequence receipt while the pure migration tests cover its graph
+  // rewrite in detail.
+  await page.route(
+    (url) => url.pathname === "/api/daily/week-start",
+    (route) => {
+      const body = Schema.decodeUnknownSync(WeekStartPostBody)(
+        route.request().postDataJSON(),
+      );
+      // SAFETY: only this fixture's week-start route writes this account-prefs
+      // key, always with the optional weekStart shape below.
+      const current = ns("account-prefs").get("daily:week-start") as
+        | { weekStart?: "sunday" | "monday" }
+        | undefined;
+      const weekStart =
+        body.operation === "set"
+          ? body.weekStart
+          : (current?.weekStart ?? "monday");
+      ns("account-prefs").set("daily:week-start", {
+        key: "daily:week-start",
+        weekStart,
+      });
+      return reply(route, { weekStart, seq });
+    },
+  );
+
+  await page.route(
+    (url) => url.pathname === "/api/kv",
+    async (route) => {
+      const req = route.request();
+      const collection =
+        new URL(req.url()).searchParams.get("collection") ?? "";
+      const m = ns(collection);
+      switch (req.method()) {
+        case "GET":
+          return reply(route, [...m.values()]);
+        case "POST": {
+          // `?op=claim` mirrors the DO's atomic get-or-create: insert only if
+          // the key is absent, return the authoritative value (pre-existing
+          // wins). The per-page Map IS the single source, so two claims for the
+          // same key here resolve to one winner -- exactly as the real DO does.
+          if (new URL(req.url()).searchParams.get("op") === "claim") {
+            const { key, value } = Schema.decodeUnknownSync(KvClaimBody)(
+              req.postDataJSON(),
+            );
+            if (!m.has(key)) m.set(key, value);
+            return reply(route, { value: m.get(key) });
+          }
+          const { rows } = Schema.decodeUnknownSync(KvUpsertBody)(
+            req.postDataJSON(),
+          );
+          for (const r of rows ?? []) m.set(r.key, r.value);
+          return reply(route, { ok: true });
+        }
+        case "DELETE": {
+          const { keys } = Schema.decodeUnknownSync(KvDeleteBody)(
+            req.postDataJSON(),
+          );
+          for (const k of keys ?? []) m.delete(k);
+          return reply(route, { ok: true });
+        }
+        default:
+          return route.fulfill({ status: 405, body: "{}" });
+      }
+    },
+  );
+
+  // The live client loads the outline over a WebSocket (/api/sync), not a GET.
+  // Hold the socket so writes can echo their change frames back here; reply to
+  // `hello` with a full snapshot at the current seq (a reconnect resumes from
+  // committed state, exactly like the DO's snapshot path).
+  await page.routeWebSocket(
+    (url) => url.pathname === "/api/sync",
+    (ws) => {
+      socket = ws;
+      ws.onMessage(async () => {
+        if (snapshotGate) await snapshotGate;
+        ws.send(
+          JSON.stringify({
+            type: "snapshot",
+            seq,
+            nodes: [...store.values()],
+            serverVersion: opts.serverVersion,
+          }),
+        );
+      });
+    },
+  );
+
+  return {
+    async injectExternalChange(ops) {
+      for (const op of ops) {
+        if (op.op === "delete") store.delete(op.key);
+        else store.set(op.value.id, op.value);
+      }
+      return broadcast(ops);
+    },
+    sendSnapshot(nodes) {
+      if (nodes) {
+        store.clear();
+        for (const node of nodes) store.set(node.id, node);
+        seq++;
+      }
+      socket?.send(
+        JSON.stringify({
+          type: "snapshot",
+          seq,
+          nodes: [...store.values()],
+          serverVersion: opts.serverVersion,
+        }),
+      );
+    },
+    holdSnapshots() {
+      let release!: () => void;
+      snapshotGate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return () => {
+        snapshotGate = null;
+        release();
+      };
+    },
+    failNextWrite() {
+      failNextStructuralWrite = true;
+    },
+  };
+}
+
+/**
+ * The standard fixture used by the navigation specs:
+ *
+ *   - Alpha            (alpha)
+ *       - Alpha one    (alpha-1)
+ *       - Alpha two    (alpha-2)
+ *   - Bravo            (bravo)
+ *   - Charlie          (charlie)
+ *
+ * Visible display order when nothing is collapsed:
+ *   alpha, alpha-1, alpha-2, bravo, charlie
+ */
+export const STANDARD_TREE: SeedNode[] = [
+  { id: "alpha", parentId: null, prevSiblingId: null, text: "Alpha" },
+  { id: "bravo", parentId: null, prevSiblingId: "alpha", text: "Bravo" },
+  { id: "charlie", parentId: null, prevSiblingId: "bravo", text: "Charlie" },
+  { id: "alpha-1", parentId: "alpha", prevSiblingId: null, text: "Alpha one" },
+  {
+    id: "alpha-2",
+    parentId: "alpha",
+    prevSiblingId: "alpha-1",
+    text: "Alpha two",
+  },
+];

@@ -1,0 +1,331 @@
+// Sentry init must run before any app code (#227). SPA mode has no client entry
+// file, so the root route module is the earliest reliable place. Keep first.
+import "../instrument.client";
+// Before anything can fetch: a `/demo` boot answers /api in the browser.
+import "../demo/install";
+import type { ReactNode } from "react";
+
+import {
+  Outlet,
+  createRootRoute,
+  HeadContent,
+  Scripts,
+  useLocation,
+} from "@tanstack/react-router";
+
+import { AmpFeedback } from "../components/amp-feedback";
+import { AppleShortcutDialog } from "../components/apple-shortcut-dialog";
+import { AuthScreen } from "../components/auth-screen";
+import { ChangelogDialog } from "../components/changelog-dialog";
+import { ColorThemeSync } from "../components/color-theme";
+import { DeleteConfirmDialog } from "../components/delete-confirm-dialog";
+import { FeedbackDialog } from "../components/feedback-dialog";
+import { HistoryRestoreDialog } from "../components/history-restore";
+import { MembershipDialog } from "../components/membership-dialog";
+import { MembershipWelcome } from "../components/membership-welcome";
+import { MirrorPlaces } from "../components/mirror-places";
+import { MoveDialog } from "../components/move-dialog";
+import { NodeSwitcher } from "../components/node-switcher";
+import { OAuthCallbackErrorToast } from "../components/oauth-callback-error";
+import { OpmlImportDialog } from "../components/opml-import-dialog";
+import { PluginEditorAppearance } from "../components/plugin-editor-appearance";
+import { QuickAdd } from "../components/quick-add";
+import { SettingsNavRegistrar } from "../components/settings-nav-registrar";
+import { ShowCompletedProvider } from "../components/show-completed-provider";
+import { SpotlightController } from "../components/spotlight-mode";
+import { TextSizeProvider } from "../components/text-size-provider";
+import { ThemeProvider } from "../components/theme-provider";
+import { Toaster } from "../components/ui/sonner";
+import { UpdateAvailableToast } from "../components/update-available";
+import { AdminAccessProvider } from "../data/admin-access";
+import { MembershipProvider } from "../data/membership";
+import { hasWindow } from "../env";
+import { hardReset, useSession } from "../lib/auth-client";
+import { FAVICON_DARK, FAVICON_LIGHT } from "../lib/favicon";
+import {
+  COLOR_THEME_KEY,
+  CUSTOM_THEME_KEY,
+  LEGACY_THEME_KEY,
+  THEME_KEY,
+  TEXT_SIZE_KEY,
+} from "../lib/storage-keys";
+import { TagColorStyles } from "../plugins/tags/tag-color-menu";
+import "../styles.css";
+import { THEME_COLORS } from "../themes.generated";
+
+// Runs before first paint so the page never flashes the wrong theme. Mirrors
+// the resolution logic in theme-provider.tsx (same storage key).
+const noFlashThemeScript = `
+(function () {
+  try {
+    var key = '${THEME_KEY}';
+    var legacy = '${LEGACY_THEME_KEY}';
+    var t = localStorage.getItem(key);
+    if (!t) {
+      t = localStorage.getItem(legacy);
+      if (t) {
+        localStorage.setItem(key, t);
+        localStorage.removeItem(legacy);
+      }
+    }
+    t = t || 'system';
+    var dark = t === 'dark' || (t === 'system' &&
+      window.matchMedia('(prefers-color-scheme: dark)').matches);
+    if (dark) document.documentElement.classList.add('dark');
+    var favicon = document.getElementById('dotflowy-favicon');
+    if (favicon) favicon.href = dark ? '${FAVICON_DARK}' : '${FAVICON_LIGHT}';
+    // Color theme (ADR 0082): its classes, and the status bar color, which
+    // must match before the stylesheet can be read. Mirrors color-theme.ts.
+    var colors = ${JSON.stringify(THEME_COLORS)};
+    var id = localStorage.getItem('${COLOR_THEME_KEY}');
+    var c = id && Object.prototype.hasOwnProperty.call(colors, id) ? colors[id] : null;
+    if (c) document.documentElement.classList.add('themed', 'theme-' + id);
+    // A custom theme (ADR 0088) paints from this device's cache of its colors,
+    // when the cache is for the saved value. Only #rrggbb values pass, the
+    // same rule as customThemeCssFromTokens in custom-theme.ts.
+    var custom = null;
+    if (id && id.indexOf('custom:') === 0) {
+      try {
+        var cache = JSON.parse(localStorage.getItem('${CUSTOM_THEME_KEY}') || 'null');
+        if (cache && cache.id === id && cache.light && cache.dark) custom = cache;
+      } catch (e) {}
+    }
+    var hex = /^#[0-9a-f]{6}$/i;
+    if (custom) {
+      var block = function (t) {
+        var out = '';
+        for (var k in t)
+          if (/^[a-z-]+$/.test(k) && hex.test(t[k])) out += '--' + k + ':' + t[k] + ';';
+        return out;
+      };
+      var style = document.createElement('style');
+      style.id = 'dotflowy-custom-theme';
+      style.textContent = ':root.theme-custom.theme-custom{' + block(custom.light) +
+        '}:root.theme-custom.theme-custom.dark{' + block(custom.dark) + '}';
+      document.head.appendChild(style);
+      document.documentElement.classList.add('themed', 'theme-custom');
+    }
+    var customBg = custom && custom[dark ? 'dark' : 'light'].background;
+    var bg = custom && hex.test(customBg) ? customBg
+      : c ? c.background[dark ? 1 : 0] : dark ? '#171717' : '#f9f9f9';
+    var metas = document.querySelectorAll('meta[name="theme-color"]');
+    for (var i = 0; i < metas.length; i++) metas[i].setAttribute('content', bg);
+  } catch (e) {}
+})();
+`;
+
+// Runs before first paint so the outline never flashes the default reading size
+// then resizes. Mirrors text-size-provider.tsx (same storage key + attribute).
+const noFlashTextSizeScript = `
+(function () {
+  try {
+    var s = localStorage.getItem('${TEXT_SIZE_KEY}');
+    if (s === 'small' || s === 'large') {
+      document.documentElement.setAttribute('data-text-size', s);
+    }
+  } catch (e) {}
+})();
+`;
+
+const APP_URL = hasWindow() ? window.location.origin : "http://localhost:8787";
+const APP_TITLE = "Dotnot";
+const APP_DESCRIPTION =
+  "Room to think. Get everything out of your head, shape it when you're ready, and find it when it matters.";
+const OG_IMAGE = `${APP_URL}/og.svg`;
+
+export const Route = createRootRoute({
+  head: () => ({
+    meta: [
+      { charSet: "utf-8" },
+      {
+        name: "viewport",
+        content:
+          "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover",
+      },
+      { title: APP_TITLE },
+      { name: "description", content: APP_DESCRIPTION },
+      { name: "application-name", content: APP_TITLE },
+      // iOS add-to-home-screen: standalone launch + status-bar styling + label.
+      { name: "apple-mobile-web-app-capable", content: "yes" },
+      { name: "apple-mobile-web-app-title", content: APP_TITLE },
+      {
+        name: "apple-mobile-web-app-status-bar-style",
+        content: "default",
+      },
+      { name: "mobile-web-app-capable", content: "yes" },
+      // Share cards (link unfurls).
+      { property: "og:type", content: "website" },
+      { property: "og:site_name", content: APP_TITLE },
+      { property: "og:url", content: APP_URL },
+      { property: "og:title", content: APP_TITLE },
+      { property: "og:description", content: APP_DESCRIPTION },
+      { property: "og:image", content: OG_IMAGE },
+      { property: "og:image:width", content: "1200" },
+      { property: "og:image:height", content: "630" },
+      { name: "twitter:card", content: "summary_large_image" },
+      { name: "twitter:title", content: APP_TITLE },
+      { name: "twitter:description", content: APP_DESCRIPTION },
+      { name: "twitter:image", content: OG_IMAGE },
+    ],
+  }),
+  component: RootComponent,
+});
+
+/** Routes that render for a VISITOR — outside the AuthGate (which would swap
+ *  them for the login screen) and outside the editor chrome, whose dialogs
+ *  assume a signed-in data layer. The password-reset landing page (its visitor
+ *  has no session — revokeSessionsOnPasswordReset killed them) and the legal
+ *  pages (public by definition, and linked from the signup screen where there
+ *  is no session yet); a future signed-out landing is added HERE. */
+const PUBLIC_ROUTES = new Set([
+  "/reset-password",
+  "/terms",
+  "/privacy",
+  "/mcp-consent",
+]);
+
+function RootComponent() {
+  // Trailing-slash-tolerant: the router matches `/reset-password/` to the
+  // route without normalizing location.pathname, so a naive equality would
+  // render the reset page inside the gate and kill the emailed link.
+  const isPublicRoute = useLocation({
+    select: (l) => PUBLIC_ROUTES.has(l.pathname.replace(/\/+$/, "") || "/"),
+  });
+  return (
+    <RootDocument>
+      <ThemeProvider>
+        {isPublicRoute ? (
+          // Bare Outlet: a public page leaves only via hardReset, so no
+          // editor state can leak across.
+          <Outlet />
+        ) : (
+          <TextSizeProvider>
+            <AuthGate>
+              <ShowCompletedProvider>
+                <Outlet />
+                <NodeSwitcher />
+                <QuickAdd />
+                {/* Registers openSettings() so the node-limit toast's "Upgrade"
+                    action can SPA-navigate to /settings from non-React code. */}
+                <SettingsNavRegistrar />
+                <MoveDialog />
+                <OpmlImportDialog />
+                <DeleteConfirmDialog />
+                <HistoryRestoreDialog />
+                <ChangelogDialog />
+                <AppleShortcutDialog />
+                <MirrorPlaces />
+                <TagColorStyles />
+                <ColorThemeSync />
+                <SpotlightController />
+                <PluginEditorAppearance />
+                {/* A distinct mechanism from the changelog (ADR 0046): the
+                    changelog says WHAT changed; this says THIS TAB is stale. */}
+                <UpdateAvailableToast />
+                {/* Inside the gate: surfaces a failed "Connect Google" round
+                    trip (signed-in). Signed-out failures render inline in
+                    AuthScreen via the same consume helper. */}
+                <OAuthCallbackErrorToast />
+              </ShowCompletedProvider>
+            </AuthGate>
+          </TextSizeProvider>
+        )}
+        {/* Outside the gate so auth-screen errors can still toast. */}
+        <Toaster />
+      </ThemeProvider>
+    </RootDocument>
+  );
+}
+
+/**
+ * Gate the whole app behind a Better Auth session. The shell is public so this
+ * renders the login screen for signed-out visitors; only the editor (and the
+ * data API it hits) require a session. While the session is still loading we
+ * render nothing to avoid flashing the login screen at an authed user.
+ */
+/**
+ * The user id this page's data-layer singletons first loaded under. A module
+ * value (not a ref): it must survive the gate unmounting/remounting and be
+ * remembered across an expiry (id → null → different id), where a previous-
+ * render comparison would misread the new id as a fresh sign-in.
+ */
+let firstUserId: string | null = null;
+
+function AuthGate({ children }: Readonly<{ children: ReactNode }>) {
+  const { data: session, isPending } = useSession();
+  if (isPending) return null;
+  if (!session) return <AuthScreen />;
+  // Identity guard: the per-call-site reloads (signOutAndReload, AuthScreen)
+  // only fire in the tab where the auth action happened. If the account is
+  // switched in ANOTHER tab, this tab's session store revalidates to the new
+  // user while its singletons and /api/sync socket still belong to the old one
+  // — truthiness alone would keep the gate open and route writes to the wrong
+  // account. A different id here always means stale in-memory state: reload.
+  if (firstUserId === null) {
+    firstUserId = session.user.id;
+  } else if (session.user.id !== firstUserId) {
+    hardReset();
+    return null;
+  }
+  return (
+    <>
+      <AmpFeedback userId={session.user.id} />
+      <MembershipProvider>
+        <AdminAccessProvider>
+          <MembershipWelcome />
+          {children}
+          <MembershipDialog />
+          <FeedbackDialog />
+        </AdminAccessProvider>
+      </MembershipProvider>
+    </>
+  );
+}
+
+function RootDocument({ children }: Readonly<{ children: ReactNode }>) {
+  return (
+    <html lang="en" className="[scrollbar-gutter:stable]">
+      <head>
+        {/* SVG tab icon — theme-swapped in place by noFlashThemeScript. */}
+        <link
+          rel="icon"
+          type="image/svg+xml"
+          href={FAVICON_LIGHT}
+          id="dotflowy-favicon"
+        />
+        {/* PNG + .ico fallbacks for browsers/tools that don't take the SVG. */}
+        <link
+          rel="icon"
+          type="image/png"
+          sizes="32x32"
+          href="/favicon-32.png"
+        />
+        <link
+          rel="icon"
+          type="image/png"
+          sizes="16x16"
+          href="/favicon-16.png"
+        />
+        <link rel="shortcut icon" href="/favicon.ico" />
+        {/* iOS home screen (ignores the manifest + SVG icons). */}
+        <link
+          rel="apple-touch-icon"
+          sizes="180x180"
+          href="/apple-touch-icon.png"
+        />
+        {/* PWA manifest + browser-UI theme color. One unscoped tag: the
+            no-flash script sets it for the Mode and color theme, and
+            color-theme.ts keeps it current (ADR 0082). */}
+        <link rel="manifest" href="/manifest.webmanifest" />
+        <meta name="theme-color" content="#ffffff" />
+        <script dangerouslySetInnerHTML={{ __html: noFlashThemeScript }} />
+        <script dangerouslySetInnerHTML={{ __html: noFlashTextSizeScript }} />
+        <HeadContent />
+      </head>
+      <body>
+        {children}
+        <Scripts />
+      </body>
+    </html>
+  );
+}

@@ -1,0 +1,62 @@
+# Local-only Worker secrets for `wrangler dev`. Copy to `.dev.vars` (gitignored)
+# and fill in. In production set these with `wrangler secret put <NAME>`.
+
+# Better Auth signing secret. Generate one: `openssl rand -base64 32`
+BETTER_AUTH_SECRET=replace-me
+
+# Comma-separated invite codes. When signup isn't open (SIGNUP_OPEN below unset,
+# the local default) a code is REQUIRED to create an account; when signup IS open
+# they still work as a backdoor. Unset + not open = signup closed. The local code
+# is `dev-invite`. In prod: `wrangler secret put INVITE_CODES`.
+INVITE_CODES=dev-invite
+
+# Open-signup switch (#293). Exactly "true" OPENS self-serve signup — the invite
+# requirement is skipped (Turnstile below still gates it). Unset or any other
+# value keeps signup invite-only (the local default here). In prod set via `wrangler secret put SIGNUP_OPEN` (or a
+# wrangler.jsonc var — it isn't sensitive).
+# SIGNUP_OPEN=true
+
+# Cloudflare Turnstile (#293). BOTH keys must be set to exercise the real
+# captcha locally; unset = the captcha plugin isn't registered and no widget
+# renders (signup/reset behave exactly as before). The values below are
+# Cloudflare's documented ALWAYS-PASS test pair — safe for local dev only.
+#   Site key (public, ships to the browser; served via GET /api/auth-config):
+# TURNSTILE_SITE_KEY=1x00000000000000000000AA
+#   Secret key (server; registers + enforces the plugin). In prod:
+#   `wrangler secret put TURNSTILE_SECRET_KEY`.
+# TURNSTILE_SECRET_KEY=1x0000000000000000000000000000000AA
+
+# Optional: Stripe billing (issue #172). Unset = the app runs fine and only the
+# billing endpoints fail. Test-mode key from the Stripe dashboard; the webhook
+# secret is printed by `stripe listen` (see "Testing Stripe billing locally" in
+# CONTRIBUTING.md). In prod: `wrangler secret put` both.
+# STRIPE_SECRET_KEY=sk_test_replace-me
+# STRIPE_WEBHOOK_SECRET=whsec_replace-me
+
+# Optional: pin the OAuth issuer to your own application origin.
+# BETTER_AUTH_URL=http://localhost:8787
+# Additional trusted browser origins, only when needed for your deployment.
+# BETTER_AUTH_TRUSTED_ORIGINS=http://localhost:3000
+
+# Optional: Google OAuth client for "Sign in with Google" (Google Cloud console
+# -> Credentials -> OAuth client ID, type "Web application"). Local redirect
+# URI: http://localhost:3000/api/auth/callback/google. Unset = the provider
+# isn't registered and the button errors; email+password is unaffected. In
+# prod: `wrangler secret put GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`.
+# GOOGLE_CLIENT_ID=
+# GOOGLE_CLIENT_SECRET=
+
+# First-party feedback alerts use FEEDBACK_NOTIFICATION_EMAIL in wrangler.jsonc.
+# Local EMAIL sends are simulated; do not enable remote email for ordinary tests.
+# Manual replies are saved to history without contacting any email provider.
+FEEDBACK_REPLY_MODE=simulate
+
+# Optional owner-only Amp feedback (docs/feedback-widget.md). Both unset = off.
+# Pin the approved account's Better Auth user.id, NOT its email or an Amp ID.
+# These are authorization config and a public client ID, not credentials.
+# AMP_FEEDBACK_USER_ID=
+# AMP_FEEDBACK_CLIENT_ID=
+
+# Optional local admin (/admin pages, ADR 0090). Pin your local Better Auth
+# user.id; the committed configuration grants no admin access.
+# ADMIN_USER_IDS=

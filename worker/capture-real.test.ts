@@ -1,0 +1,2891 @@
+import { hashPassword } from "better-auth/crypto";
+import { afterAll, beforeAll, expect, test } from "bun:test";
+import { build } from "esbuild";
+import { Miniflare, Response as FixtureResponse } from "miniflare";
+import { createHash, createHmac, randomUUID } from "node:crypto";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import type { EmbedDescriptor } from "../src/data/embed-providers";
+import type { FeedbackSubmission } from "../src/data/feedback";
+import type { Node } from "../src/data/wire-schema";
+import type { OutlineSnapshot } from "./backup";
+import type {
+  CaptureBody,
+  CaptureReceipt,
+  CaptureResult,
+} from "./capture-input";
+import type { CaptureKeyEntry } from "./capture-keys";
+import type { FixtureInput } from "./capture-real-fixture";
+import type { KvClaimBody, KvUpsertBody } from "./wire";
+
+import { captureDigest } from "./capture-input";
+
+let mf: Miniflare;
+let directory: string;
+const outboundUrls: string[] = [];
+// Stripe transport is fixture-owned. No request in this suite reaches Stripe.
+const stripeSubscriptions = new Map<string, string>();
+const trialCheckouts = new Map<
+  string,
+  { id: string; url: string; params: URLSearchParams }
+>();
+let trialCheckoutPosts = 0;
+const webhookSecret = "whsec_disposable_membership_fixture";
+
+type Key = { key: string; entry: { id: string; suffix: string } };
+type Inspection = {
+  snapshot: OutlineSnapshot;
+  keys: Array<CaptureKeyEntry & { hash: string }>;
+};
+
+async function fixture<A = unknown>(
+  path: string,
+  input: FixtureInput,
+): Promise<A> {
+  const { response, body } = await fixtureResponse<A>(path, input);
+  expect(response.status, JSON.stringify(body)).toBe(200);
+  return body;
+}
+
+async function fixtureResponse<A = unknown>(path: string, input: FixtureInput) {
+  const response = await mf.dispatchFetch(`http://fixture/fixture/${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  // SAFETY: The test-owned fixture routes return the contract chosen at each call site.
+  return { response, body: (await response.json()) as A };
+}
+
+async function api(path: string, key: string, body?: typeof CaptureBody.Type) {
+  const headers = new Headers({ authorization: `Bearer ${key}` });
+  if (body !== undefined) headers.set("content-type", "application/json");
+  const response = await mf.dispatchFetch(`http://fixture${path}`, {
+    method: body === undefined ? "GET" : "POST",
+    headers: Object.fromEntries(headers),
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  // SAFETY: Capture returns receipt fields on success, error/message on failure;
+  // other endpoints are used only to assert status and may return non-JSON.
+  const result = (await response.json().catch(() => null)) as Partial<
+    CaptureReceipt & { replayed: boolean; error: string; message: string }
+  > | null;
+  return {
+    response,
+    body: result,
+  };
+}
+
+async function account() {
+  const userId = randomUUID();
+  await fixture("seed", { userId });
+  const created = await fixture<Key>("key", { userId });
+  return { userId, ...created };
+}
+
+function assertSiblingChains(nodes: readonly Node[]) {
+  const byParent = new Map<string | null, Node[]>();
+  for (const node of nodes)
+    byParent.set(node.parentId, [...(byParent.get(node.parentId) ?? []), node]);
+  for (const siblings of byParent.values()) {
+    expect(siblings.filter((node) => node.prevSiblingId === null)).toHaveLength(
+      1,
+    );
+    const ids = new Set(siblings.map((node) => node.id));
+    expect(
+      siblings
+        .filter((node) => node.prevSiblingId !== null)
+        .every((node) => ids.has(node.prevSiblingId!)),
+    ).toBe(true);
+    const seen = new Set<string>();
+    let current = siblings.find((node) => node.prevSiblingId === null)!;
+    while (current) {
+      expect(seen.has(current.id)).toBe(false);
+      seen.add(current.id);
+      const next = siblings.find((node) => node.prevSiblingId === current.id);
+      if (!next) break;
+      current = next;
+    }
+    expect(seen.size).toBe(siblings.length);
+  }
+}
+
+beforeAll(async () => {
+  directory = await mkdtemp(join(tmpdir(), "dotflowy-capture-"));
+  const scriptPath = join(directory, "worker.mjs");
+  await build({
+    entryPoints: ["worker/capture-real-worker.ts"],
+    outfile: scriptPath,
+    bundle: true,
+    format: "esm",
+    platform: "browser",
+    conditions: ["workerd", "browser"],
+    external: ["cloudflare:*", "node:*"],
+    target: "es2022",
+  });
+  mf = new Miniflare({
+    unsafeInspectDurableObjects: true,
+    workers: [
+      {
+        config: {
+          type: "worker",
+          name: "capture-test",
+          compatibilityDate: "2026-06-23",
+          compatibilityFlags: ["nodejs_compat"],
+          manifest: {
+            mainModule: "worker.mjs",
+            modulesRoot: directory,
+            modules: {
+              "worker.mjs": {
+                type: "esm",
+                contents: await readFile(scriptPath),
+              },
+            },
+          },
+          env: {
+            USER_OUTLINE: {
+              type: "durable-object",
+              worker: "capture-test",
+              exportName: "UserOutlineDO",
+            },
+            SHARD: {
+              type: "durable-object",
+              worker: "capture-test",
+              exportName: "ShardDO",
+            },
+            DB: { type: "d1", id: "capture-db" },
+            BACKUPS: { type: "r2", name: "capture-backups" },
+            CAPTURE_LIMIT: {
+              type: "rate-limit",
+              namespace: "1003",
+              simple: { limit: 60, period: 60 },
+            },
+            UNFURL_LIMIT: {
+              type: "rate-limit",
+              namespace: "1004",
+              simple: { limit: 30, period: 60 },
+            },
+            BETTER_AUTH_SECRET: {
+              type: "text",
+              value: "disposable-capture-test-secret-not-for-production",
+            },
+            BETTER_AUTH_URL: { type: "text", value: "http://fixture" },
+            STRIPE_SECRET_KEY: {
+              type: "text",
+              value: "sk_test_disposable_membership_fixture",
+            },
+            STRIPE_WEBHOOK_SECRET: { type: "text", value: webhookSecret },
+            SIGNUP_OPEN: { type: "text", value: "true" },
+            OWNER_USER_ID: { type: "text", value: "nobody-is-the-owner" },
+            AMP_FEEDBACK_USER_ID: { type: "text", value: "feedback-owner" },
+            AMP_FEEDBACK_CLIENT_ID: {
+              type: "text",
+              value: "client_TestReview",
+            },
+            ADMIN_EMAILS: {
+              type: "text",
+              value:
+                "feedback-other@capture.test,capabilities-admin@capture.test",
+            },
+          },
+          exports: {
+            UserOutlineDO: { type: "durable-object", storage: "sqlite" },
+            ShardDO: { type: "durable-object", storage: "sqlite" },
+          },
+        },
+        dev: {
+          outboundService: {
+            type: "fetcher",
+            async handler(request) {
+              const url = new URL(request.url);
+              if (url.hostname === "api.stripe.com") {
+                if (
+                  url.pathname === "/v1/subscriptions" ||
+                  url.pathname === "/v1/customers/search" ||
+                  url.pathname === "/v1/prices"
+                ) {
+                  return new FixtureResponse(
+                    JSON.stringify({
+                      object: "list",
+                      data:
+                        url.pathname === "/v1/prices"
+                          ? [
+                              {
+                                id: "price_trial_monthly",
+                                lookup_key: "dotflowy_unlimited_monthly",
+                                recurring: { interval: "month" },
+                                unit_amount: 500,
+                                currency: "usd",
+                              },
+                            ]
+                          : [],
+                    }),
+                    { headers: { "content-type": "application/json" } },
+                  );
+                }
+                if (
+                  url.pathname === "/v1/customers" &&
+                  request.method === "POST"
+                ) {
+                  const params = new URLSearchParams(await request.text());
+                  return new FixtureResponse(
+                    JSON.stringify({
+                      id: `cus_${params.get("metadata[userId]")}`,
+                    }),
+                    {
+                      headers: { "content-type": "application/json" },
+                    },
+                  );
+                }
+                if (
+                  url.pathname === "/v1/checkout/sessions" &&
+                  request.method === "POST"
+                ) {
+                  trialCheckoutPosts++;
+                  const key =
+                    request.headers.get("idempotency-key") ?? randomUUID();
+                  const params = new URLSearchParams(await request.text());
+                  let checkout = trialCheckouts.get(key);
+                  if (!checkout) {
+                    checkout = {
+                      id: `cs_${randomUUID()}`,
+                      url: "https://checkout.stripe.com/c/pay/fixture-trial",
+                      params,
+                    };
+                    trialCheckouts.set(key, checkout);
+                  } else expect([...params]).toEqual([...checkout.params]);
+                  return new FixtureResponse(JSON.stringify(checkout), {
+                    headers: { "content-type": "application/json" },
+                  });
+                }
+                const subscription = stripeSubscriptions.get(
+                  url.pathname.split("/").pop() ?? "",
+                );
+                return new FixtureResponse(
+                  subscription ??
+                    JSON.stringify({
+                      error: { message: "No fixture for this Stripe call" },
+                    }),
+                  {
+                    status: subscription ? 200 : 404,
+                    headers: { "content-type": "application/json" },
+                  },
+                );
+              }
+              if (
+                url.hostname === "fixture.unfurl.test" ||
+                ["x.com", "twitter.com", "mobile.twitter.com"].includes(
+                  url.hostname,
+                )
+              ) {
+                outboundUrls.push(request.url);
+                const redirect = url.searchParams.get("redirect");
+                return redirect
+                  ? new FixtureResponse(null, {
+                      status: 302,
+                      headers: { location: redirect },
+                    })
+                  : new FixtureResponse("<title>Ordinary page</title>", {
+                      headers: { "content-type": "text/html" },
+                    });
+              }
+              // Preserve the existing opt-in provider smoke test's live transport.
+              const response = await fetch(request.url);
+              return new FixtureResponse(await response.arrayBuffer(), {
+                status: response.status,
+                headers: Object.fromEntries(response.headers),
+              });
+            },
+          },
+        },
+      },
+    ],
+  });
+  const db = await mf.getD1Database("DB");
+  for (const migration of [
+    "0003_create_auth.sql",
+    "0004_create_oauth.sql",
+    "0005_create_waitlist.sql",
+    "0006_create_stripe.sql",
+    "0007_create_invites.sql",
+    "0014_capture_keys.sql",
+    "0015_scoped_api_keys.sql",
+    "0017_membership_welcome.sql",
+    "0018_first_party_feedback.sql",
+    "0019_feedback_triage.sql",
+    "0020_feedback_replies.sql",
+    "0021_pro_trial_checkout.sql",
+  ]) {
+    const sql = await readFile(`migrations/${migration}`, "utf8");
+    await db.exec(sql.replace(/--[^\n]*/g, "").replaceAll("\n", " "));
+  }
+}, 60_000);
+
+afterAll(async () => {
+  await mf?.dispose();
+  if (directory) await rm(directory, { recursive: true, force: true });
+});
+
+test("membership gates theme writes, keeps the launch exception narrow, and scopes welcome dismissal to the account", async () => {
+  const db = await mf.getD1Database("DB");
+  const freeId = randomUUID();
+  const legacyId = "N67xxLwtsZ7FA1YTv7u90gqF8y9k3i1f";
+  async function signIn(id: string) {
+    const password = "membership-fixture-password";
+    await fixture("seed", {
+      userId: id,
+      password: await hashPassword(password),
+    });
+    const email = `${id.toLowerCase()}@capture.test`;
+    await db
+      .prepare('UPDATE "user" SET email = ? WHERE id = ?')
+      .bind(email, id)
+      .run();
+    const response = await mf.dispatchFetch(
+      "http://fixture/api/auth/sign-in/email",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          origin: "http://fixture",
+        },
+        body: JSON.stringify({ email, password }),
+      },
+    );
+    expect(response.status).toBe(200);
+    return response.headers
+      .getSetCookie()
+      .map((value) => value.split(";")[0])
+      .join("; ");
+  }
+  const freeCookie = await signIn(freeId);
+  const legacyCookie = await signIn(legacyId);
+  const origin = (await mf.ready).origin;
+  const request = (
+    cookie: string,
+    path: string,
+    body?:
+      | typeof KvUpsertBody.Type
+      | typeof KvClaimBody.Type
+      | FeedbackSubmission
+      | { id: string },
+    requestOrigin = origin,
+  ) =>
+    mf.dispatchFetch(`${origin}${path}`, {
+      method: body === undefined ? "GET" : "POST",
+      headers: {
+        cookie,
+        origin: requestOrigin,
+        "content-type": "application/json",
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  const theme = (name: string, key = "appearance:color-theme") => ({
+    key,
+    value: { key: "appearance:color-theme", theme: name },
+  });
+  const kvPath = "/api/kv?collection=account-prefs";
+  expect(
+    (await request(freeCookie, "/api/membership")).headers.get("cache-control"),
+  ).toBe("private, no-store");
+  expect(
+    await (await request(freeCookie, "/api/membership")).json(),
+  ).toMatchObject({ plan: "free", legacyLeaf: false, welcome: null });
+  expect(
+    await (await request(legacyCookie, "/api/membership")).json(),
+  ).toMatchObject({ plan: "free", legacyLeaf: true, welcome: null });
+  expect(
+    (await request(freeCookie, kvPath, { rows: [theme("default")] })).status,
+  ).toBe(200);
+  expect(
+    (await request(freeCookie, kvPath, { rows: [theme("leaf")] })).status,
+  ).toBe(403);
+  // A Custom theme (ADR 0088) is a paid theme too.
+  expect(
+    (
+      await request(freeCookie, kvPath, {
+        rows: [theme("custom:1:255,0.17,0.3")],
+      })
+    ).status,
+  ).toBe(403);
+  expect(
+    (await request(freeCookie, kvPath, { rows: [theme("leaf", "alias")] }))
+      .status,
+  ).toBe(400);
+  expect(
+    (
+      await request(freeCookie, `${kvPath}&op=claim`, {
+        key: "alias",
+        value: { key: "appearance:color-theme", theme: "leaf" },
+      })
+    ).status,
+  ).toBe(400);
+  expect(
+    (await request(legacyCookie, kvPath, { rows: [theme("leaf")] })).status,
+  ).toBe(200);
+  expect(
+    (await request(legacyCookie, kvPath, { rows: [theme("catppuccin")] }))
+      .status,
+  ).toBe(403);
+  // A rejected mixed batch cannot sneak any part of a premium pick into storage.
+  expect(
+    (
+      await request(freeCookie, kvPath, {
+        rows: [theme("default"), theme("leaf")],
+      })
+    ).status,
+  ).toBe(403);
+  expect(await (await request(freeCookie, kvPath)).json()).toEqual([
+    { key: "appearance:color-theme", theme: "default" },
+  ]);
+  for (const status of ["past_due", "trialing", "active"]) {
+    await db
+      .prepare(
+        "INSERT OR REPLACE INTO subscription (id, plan, referenceId, status, stripeSubscriptionId) VALUES ('member-test', 'unlimited', ?, ?, 'sub_member')",
+      )
+      .bind(freeId, status)
+      .run();
+    expect(
+      (await request(freeCookie, kvPath, { rows: [theme("catppuccin")] }))
+        .status,
+    ).toBe(status === "past_due" ? 403 : 200);
+    expect(
+      (
+        await request(freeCookie, kvPath, {
+          rows: [theme("custom:1:255,0.17,0.3,40,0.2")],
+        })
+      ).status,
+    ).toBe(status === "past_due" ? 403 : 200);
+    // Out-of-range or CSS-carrying values never reach storage, on any plan.
+    for (const bad of [
+      "custom:1:400,0.17,0.3",
+      "custom:1:255,0.17,0.3;}html{background:url(x)}",
+    ])
+      expect(
+        (await request(freeCookie, kvPath, { rows: [theme(bad)] })).status,
+      ).toBe(400);
+    // Entitlement or a forged return URL is not a payment receipt.
+    expect(
+      await (
+        await request(freeCookie, "/api/membership?checkout=success")
+      ).json(),
+    ).toMatchObject({ welcome: null });
+  }
+  await db
+    .prepare(
+      "INSERT INTO membership_welcome (id, userId, plan, createdAt) VALUES ('sub_member', ?, 'unlimited', 1)",
+    )
+    .bind(freeId)
+    .run();
+  expect(
+    await (await request(freeCookie, "/api/membership")).json(),
+  ).toMatchObject({ welcome: { id: "sub_member", plan: "unlimited" } });
+  const neighborAck = await request(legacyCookie, "/api/membership", {
+    id: "sub_member",
+  });
+  expect(neighborAck.status, await neighborAck.text()).toBe(200);
+  expect(
+    await (await request(freeCookie, "/api/membership")).json(),
+  ).toMatchObject({ welcome: { id: "sub_member" } });
+  expect(
+    (
+      await request(
+        freeCookie,
+        "/api/membership",
+        { id: "sub_member" },
+        "https://untrusted.test",
+      )
+    ).status,
+  ).toBe(403);
+  expect(
+    (await request(freeCookie, "/api/membership", { id: "sub_member" })).status,
+  ).toBe(200);
+  expect(
+    await (await request(freeCookie, "/api/membership")).json(),
+  ).toMatchObject({ welcome: null });
+  // First-party bugs reach durable storage; plan tags and the inbox are server-owned.
+  const report: FeedbackSubmission = {
+    id: randomUUID(),
+    kind: "bug",
+    message: "Fixture report",
+    context: { appVersion: "3.2.0" },
+  };
+  expect(
+    (
+      await request(
+        legacyCookie,
+        "/api/feedback",
+        report,
+        "https://untrusted.test",
+      )
+    ).status,
+  ).toBe(403);
+  expect((await request(legacyCookie, "/api/feedback", report)).status).toBe(
+    201,
+  );
+  expect(
+    await db
+      .prepare("SELECT plan FROM feedback_submissions WHERE user_id = ?")
+      .bind(legacyId)
+      .first<{ plan: string }>(),
+  ).toEqual({ plan: "free" });
+  expect((await request("", "/api/admin/feedback")).status).toBe(404);
+  expect((await request(freeCookie, "/api/admin/feedback")).status).toBe(404);
+  // The admin capability comes from the session and agrees with enforcement.
+  const adminCookie = await signIn("capabilities-admin");
+  expect((await request("", "/api/account-capabilities")).status).toBe(401);
+  for (const [cookie, admin] of [
+    [freeCookie, false],
+    [adminCookie, true],
+  ] as const) {
+    const capabilities = await request(cookie, "/api/account-capabilities");
+    expect(capabilities.headers.get("cache-control")).toBe("private, no-store");
+    expect(await capabilities.json()).toEqual({ admin });
+  }
+  expect((await request(adminCookie, "/api/admin/feedback")).status).toBe(200);
+});
+
+test("only a signed paid checkout queues a welcome, and webhook retries cannot revive a dismissed note", async () => {
+  const db = await mf.getD1Database("DB");
+  const userId = randomUUID();
+  await fixture("seed", { userId });
+  const stripeId = `sub_${randomUUID()}`;
+  const rowId = randomUUID();
+  await db
+    .prepare(
+      "INSERT INTO subscription (id, plan, referenceId, status) VALUES (?, 'founding', ?, 'incomplete')",
+    )
+    .bind(rowId, userId)
+    .run();
+  const now = Math.floor(Date.now() / 1000);
+  const stripeSubscription = {
+    id: stripeId,
+    object: "subscription",
+    customer: "cus_fixture",
+    status: "active",
+    cancel_at_period_end: false,
+    metadata: { subscriptionId: rowId, referenceId: userId },
+    items: {
+      data: [
+        {
+          id: "si_fixture",
+          quantity: 1,
+          current_period_start: now,
+          current_period_end: now + 86400,
+          price: {
+            id: "price_fixture",
+            lookup_key: "dotflowy_founding",
+            recurring: { interval: "year", interval_count: 3 },
+          },
+        },
+      ],
+    },
+  };
+  stripeSubscriptions.set(stripeId, JSON.stringify(stripeSubscription));
+  const event = (
+    paymentStatus: string,
+    type = "checkout.session.completed",
+    subscriptionId = stripeId,
+  ) =>
+    JSON.stringify({
+      id: `evt_${randomUUID()}`,
+      object: "event",
+      type,
+      created: now,
+      data: {
+        object: {
+          id: "cs_fixture",
+          object: "checkout.session",
+          mode: "subscription",
+          subscription: subscriptionId,
+          client_reference_id: userId,
+          payment_status: paymentStatus,
+          metadata: { subscriptionId: rowId, referenceId: userId, userId },
+        },
+      },
+    });
+  const send = (body: string, secret = webhookSecret) =>
+    mf.dispatchFetch("http://fixture/api/auth/stripe/webhook", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "stripe-signature": `t=${now},v1=${createHmac("sha256", secret).update(`${now}.${body}`).digest("hex")}`,
+      },
+      body,
+    });
+  const welcome = () =>
+    db
+      .prepare(
+        "SELECT id, plan, seenAt FROM membership_welcome WHERE userId = ?",
+      )
+      .bind(userId)
+      .first<{ id: string; plan: string; seenAt: number | null }>();
+  expect((await send(event("paid"), "wrong_fixture_secret")).status).toBe(400);
+  expect(await welcome()).toBeNull();
+  expect((await send(event("unpaid"))).status).toBe(200);
+  expect(await welcome()).toBeNull();
+  stripeSubscriptions.set(
+    stripeId,
+    JSON.stringify({ ...stripeSubscription, status: "trialing" }),
+  );
+  expect((await send(event("paid"))).status).toBe(200);
+  expect(await welcome()).toBeNull();
+  stripeSubscriptions.set(stripeId, JSON.stringify(stripeSubscription));
+  const paid = event("paid");
+  const response = await send(paid);
+  expect(response.status, await response.text()).toBe(200);
+  expect(await welcome()).toEqual({
+    id: stripeId,
+    plan: "founding",
+    seenAt: null,
+  });
+  await db
+    .prepare("UPDATE membership_welcome SET seenAt = 123 WHERE userId = ?")
+    .bind(userId)
+    .run();
+  expect((await send(paid)).status).toBe(200);
+  expect(await welcome()).toEqual({
+    id: stripeId,
+    plan: "founding",
+    seenAt: 123,
+  });
+  expect((await send(event("paid", "invoice.paid"))).status).toBe(200);
+  expect(await welcome()).toEqual({
+    id: stripeId,
+    plan: "founding",
+    seenAt: 123,
+  });
+  const delayedId = `sub_${randomUUID()}`;
+  const delayed = event(
+    "paid",
+    "checkout.session.async_payment_succeeded",
+    delayedId,
+  );
+  expect((await send(delayed)).status).toBe(400);
+  await db
+    .prepare(
+      "INSERT INTO subscription (id, plan, referenceId, status, stripeSubscriptionId) VALUES (?, 'unlimited', ?, 'active', ?)",
+    )
+    .bind(randomUUID(), userId, delayedId)
+    .run();
+  expect((await send(delayed)).status).toBe(200);
+  expect(
+    await db
+      .prepare("SELECT plan, seenAt FROM membership_welcome WHERE id = ?")
+      .bind(delayedId)
+      .first<{ plan: string; seenAt: number | null }>(),
+  ).toEqual({ plan: "unlimited", seenAt: null });
+});
+
+test("cardless trial setup is explicit, serialized, replayable and follows verified Stripe lifecycle without changing paid checkout", async () => {
+  const db = await mf.getD1Database("DB");
+  const userId = randomUUID();
+  const password = "trial-fixture-password";
+  await fixture("seed", { userId, password: await hashPassword(password) });
+  const login = await mf.dispatchFetch(
+    "http://fixture/api/auth/sign-in/email",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: "http://fixture" },
+      body: JSON.stringify({ email: `${userId}@capture.test`, password }),
+    },
+  );
+  expect(login.status).toBe(200);
+  const cookie = login.headers
+    .getSetCookie()
+    .map((value) => value.split(";")[0])
+    .join("; ");
+  const localOrigin = (await mf.ready).origin;
+  const request = (
+    path: string,
+    body?: Record<string, string | boolean>,
+    origin = localOrigin,
+  ) =>
+    mf.dispatchFetch(`${localOrigin}${path}`, {
+      method: body === undefined ? "GET" : "POST",
+      headers: { cookie, origin, "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  // SAFETY: the real projection is asserted throughout this workflow.
+  const membership = async () =>
+    (await request("/api/membership")).json() as Promise<{
+      plan: string;
+      trialEligible: boolean;
+      welcome: unknown;
+      subs: { status: string; trialEnd: string }[];
+    }>;
+  const path = "/api/membership/trial";
+  expect(await membership()).toMatchObject({
+    plan: "free",
+    trialEligible: true,
+  });
+  await db
+    .prepare("UPDATE user SET emailVerified = 0 WHERE id = ?")
+    .bind(userId)
+    .run();
+  expect((await request(path, { consent: true })).status).toBe(409);
+  await db
+    .prepare("UPDATE user SET emailVerified = 1 WHERE id = ?")
+    .bind(userId)
+    .run();
+  for (const [status, stripeId, trialEnd, eligible] of [
+    ["active", null, null, false], // Comped users already have Pro.
+    ["active", "sub_paid", null, false],
+    ["past_due", "sub_unresolved", null, false],
+    ["paused", "sub_paused", null, false],
+    ["canceled", "sub_past_trial", Date.now() - 1000, false],
+    ["canceled", "sub_ended_paid", null, true],
+  ] as const) {
+    await db
+      .prepare(
+        "INSERT INTO subscription (id, plan, referenceId, status, stripeSubscriptionId, trialEnd) VALUES ('eligibility_fixture', 'unlimited', ?, ?, ?, ?)",
+      )
+      .bind(userId, status, stripeId, trialEnd)
+      .run();
+    expect(await membership()).toHaveProperty("trialEligible", eligible);
+    if (!eligible)
+      expect((await request(path, { consent: true })).status).toBe(409);
+    await db
+      .prepare("DELETE FROM subscription WHERE id = 'eligibility_fixture'")
+      .run();
+  }
+  // A normal paid purchase remains a paid purchase, never an implicit trial.
+  const paid = await request(
+    "/api/auth/subscription/upgrade",
+    {
+      plan: "unlimited",
+      annual: false,
+      disableRedirect: true,
+      successUrl: "/settings?checkout=success",
+      cancelUrl: "/settings?checkout=canceled",
+    },
+    "http://fixture",
+  );
+  expect(paid.status, await paid.clone().text()).toBe(200);
+  const paidCheckout = [...trialCheckouts.values()].find(
+    (entry) => entry.params.get("client_reference_id") === userId,
+  );
+  expect(paidCheckout).toBeDefined();
+  expect(
+    paidCheckout?.params.get("subscription_data[trial_period_days]"),
+  ).toBeNull();
+  expect(paidCheckout?.params.get("payment_method_collection")).toBeNull();
+  expect((await request(path, { consent: false })).status).toBe(400);
+  expect(
+    (await request(path, { consent: true }, "https://evil.test")).status,
+  ).toBe(403);
+  expect(
+    (
+      await mf.dispatchFetch(`http://fixture${path}`, {
+        method: "POST",
+        body: JSON.stringify({ consent: true }),
+      })
+    ).status,
+  ).toBe(401);
+  const before = trialCheckouts.size;
+  const concurrent = await Promise.all([
+    request(path, { consent: true }),
+    request(path, { consent: true }),
+  ]);
+  expect(concurrent.some((response) => response.status === 200)).toBe(true);
+  expect(
+    concurrent.every(
+      (response) => response.status === 200 || response.status === 409,
+    ),
+  ).toBe(true);
+  expect(trialCheckouts.size).toBe(before + 1);
+  const replay = await request(path, { consent: true });
+  expect(replay.status, await replay.clone().text()).toBe(200);
+  expect(await replay.json()).toMatchObject({
+    url: "https://checkout.stripe.com/c/pay/fixture-trial",
+  });
+  const claim = await db
+    .prepare(
+      "SELECT attemptId, expiresAt FROM pro_trial_checkout WHERE userId = ?",
+    )
+    .bind(userId)
+    .first<{ attemptId: string; expiresAt: number }>();
+  const checkout = [...trialCheckouts.values()].find(
+    (entry) =>
+      entry.params.get("client_reference_id") === userId &&
+      entry.params.has("subscription_data[trial_period_days]"),
+  )!;
+  expect(checkout.params.get("payment_method_collection")).toBe("if_required");
+  expect(checkout.params.get("subscription_data[trial_period_days]")).toBe(
+    "14",
+  );
+  expect(
+    checkout.params.get(
+      "subscription_data[trial_settings][end_behavior][missing_payment_method]",
+    ),
+  ).toBe("cancel");
+  expect(checkout.params.get("expires_at")).toBe(
+    String(Math.floor(claim!.expiresAt / 1000)),
+  );
+  expect(await membership()).toMatchObject({ plan: "free", welcome: null });
+  // Simulate interruption after Stripe accepted setup but before URL persistence.
+  await db
+    .prepare(
+      "UPDATE pro_trial_checkout SET url = NULL, leaseUntil = 0 WHERE userId = ?",
+    )
+    .bind(userId)
+    .run();
+  const posts = trialCheckoutPosts;
+  expect((await request(path, { consent: true })).status).toBe(200);
+  expect(trialCheckoutPosts).toBe(posts + 1);
+  expect(trialCheckouts.size).toBe(before + 1);
+  // An uncertain late setup must not mint an overlapping session or send an
+  // expires_at below Stripe's 30-minute minimum. A known URL remains reusable.
+  await db
+    .prepare(
+      "UPDATE pro_trial_checkout SET expiresAt = ?, url = NULL WHERE userId = ?",
+    )
+    .bind(Date.now() + 30 * 60_000, userId)
+    .run();
+  expect((await request(path, { consent: true })).status).toBe(409);
+  expect(trialCheckoutPosts).toBe(posts + 1);
+  await db
+    .prepare("UPDATE pro_trial_checkout SET url = ? WHERE userId = ?")
+    .bind(checkout.url, userId)
+    .run();
+  expect((await request(path, { consent: true })).status).toBe(200);
+  await db
+    .prepare("UPDATE pro_trial_checkout SET expiresAt = ? WHERE userId = ?")
+    .bind(claim!.expiresAt, userId)
+    .run();
+
+  const now = Math.floor(Date.now() / 1000);
+  const trialEnd = now + 14 * 86400;
+  const stripeId = `sub_${randomUUID()}`;
+  const rowId = checkout.params.get("metadata[subscriptionId]");
+  const stripeSub = {
+    id: stripeId,
+    object: "subscription",
+    customer: `cus_${userId}`,
+    status: "trialing",
+    trial_start: now,
+    trial_end: trialEnd,
+    cancel_at_period_end: false,
+    metadata: {
+      subscriptionId: rowId,
+      referenceId: userId,
+      userId,
+      dotflowyTrial: claim!.attemptId,
+    },
+    items: {
+      data: [
+        {
+          id: "si_trial",
+          quantity: 1,
+          current_period_start: now,
+          current_period_end: trialEnd,
+          price: {
+            id: "price_trial_monthly",
+            lookup_key: "dotflowy_unlimited_monthly",
+            recurring: { interval: "month" },
+          },
+        },
+      ],
+    },
+  };
+  stripeSubscriptions.set(stripeId, JSON.stringify(stripeSub));
+  const send = (
+    type: string,
+    object:
+      | typeof stripeSub
+      | typeof invoice
+      | {
+          id: string;
+          object: string;
+          mode: string;
+          subscription: string;
+          client_reference_id: string;
+          payment_status: string;
+          metadata: typeof stripeSub.metadata;
+        },
+  ) => {
+    const body = JSON.stringify({
+      id: `evt_${randomUUID()}`,
+      object: "event",
+      type,
+      created: now,
+      data: { object },
+    });
+    return mf.dispatchFetch("http://fixture/api/auth/stripe/webhook", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "stripe-signature": `t=${now},v1=${createHmac("sha256", webhookSecret).update(`${now}.${body}`).digest("hex")}`,
+      },
+      body,
+    });
+  };
+  const completed = await send("checkout.session.completed", {
+    id: checkout.id,
+    object: "checkout.session",
+    mode: "subscription",
+    subscription: stripeId,
+    client_reference_id: userId,
+    payment_status: "no_payment_required",
+    metadata: stripeSub.metadata,
+  });
+  expect(completed.status, await completed.text()).toBe(200);
+  expect((await send("customer.subscription.updated", stripeSub)).status).toBe(
+    200,
+  );
+  expect(await membership()).toMatchObject({
+    plan: "unlimited",
+    trialEligible: false,
+    welcome: null,
+    subs: [
+      { status: "trialing", trialEnd: new Date(trialEnd * 1000).toISOString() },
+    ],
+  });
+  const key = await fixture<Key>("key", { userId, permission: "read" });
+  const mcp = () =>
+    mf.dispatchFetch("http://fixture/mcp", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${key.key}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "get_outline", arguments: {} },
+      }),
+    });
+  expect(await (await mcp()).json()).toHaveProperty("result");
+  expect((await request(path, { consent: true })).status).toBe(409);
+  // Trial expiry removes access but retains outline ownership and history.
+  expect(
+    (
+      await send("customer.subscription.deleted", {
+        ...stripeSub,
+        status: "canceled",
+      })
+    ).status,
+  ).toBe(200);
+  expect(await membership()).toMatchObject({
+    plan: "free",
+    trialEligible: false,
+  });
+  expect(await (await mcp()).json()).toHaveProperty("error.code", -32001);
+  // The used marker survives canceled-subscription row cleanup.
+  await db
+    .prepare(
+      "UPDATE subscription SET trialStart = NULL, trialEnd = NULL WHERE stripeSubscriptionId = ?",
+    )
+    .bind(stripeId)
+    .run();
+  expect((await request(path, { consent: true })).status).toBe(409);
+  await db
+    .prepare(
+      "UPDATE subscription SET trialEnd = ? WHERE stripeSubscriptionId = ?",
+    )
+    .bind(trialEnd * 1000, stripeId)
+    .run();
+  // An actual paid conversion invoice, not a zero invoice or renewal, queues welcome.
+  const invoice = {
+    id: "in_trial",
+    amount_paid: 0,
+    billing_reason: "subscription_cycle",
+    parent: {
+      subscription_details: {
+        subscription: stripeId,
+        metadata: stripeSub.metadata,
+      },
+    },
+    lines: { data: [{ period: { start: trialEnd } }] },
+  };
+  expect((await send("invoice.paid", invoice)).status).toBe(200);
+  expect(
+    await db
+      .prepare("SELECT id FROM membership_welcome WHERE id = ?")
+      .bind(stripeId)
+      .first(),
+  ).toBeNull();
+  expect(
+    (
+      await send("invoice.paid", {
+        ...invoice,
+        amount_paid: 500,
+        lines: { data: [{ period: { start: trialEnd + 31 * 86400 } }] },
+      })
+    ).status,
+  ).toBe(200);
+  expect(
+    await db
+      .prepare("SELECT id FROM membership_welcome WHERE id = ?")
+      .bind(stripeId)
+      .first(),
+  ).toBeNull();
+  expect(
+    (
+      await send("customer.subscription.updated", {
+        ...stripeSub,
+        status: "active",
+      })
+    ).status,
+  ).toBe(200);
+  expect(
+    (await send("invoice.paid", { ...invoice, amount_paid: 500 })).status,
+  ).toBe(200);
+  expect(await membership()).toMatchObject({
+    plan: "unlimited",
+    welcome: { id: stripeId },
+  });
+  expect((await request(path, { consent: true })).status).toBe(409);
+});
+
+test("retained shards stay inert until authenticated account erasure, without affecting a neighbor", async () => {
+  const email = `${randomUUID()}@capture.test`;
+  const password = "disposable-test-password-1";
+  const signup = await mf.dispatchFetch(
+    "http://fixture/api/auth/sign-up/email",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: "http://fixture" },
+      body: JSON.stringify({ name: "Deletion test", email, password }),
+    },
+  );
+  expect(signup.status, await signup.clone().text()).toBe(200);
+  const db = await mf.getD1Database("DB");
+  const user = await db
+    .prepare('SELECT id FROM "user" WHERE email=?')
+    .bind(email)
+    .first<{ id: string }>();
+  expect(user).not.toBeNull();
+  const userId = user!.id;
+  await db
+    .prepare('UPDATE "user" SET emailVerified=1 WHERE id=?')
+    .bind(userId)
+    .run();
+  const signin = await mf.dispatchFetch(
+    "http://fixture/api/auth/sign-in/email",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: "http://fixture" },
+      body: JSON.stringify({ email, password }),
+    },
+  );
+  expect(signin.status).toBe(200);
+  const cookie = signin.headers
+    .getSetCookie()
+    .map((value) => value.split(";")[0])
+    .join("; ");
+  const neighbor = await account();
+  await fixture("capture", {
+    userId,
+    attemptId: randomUUID(),
+    date: "2026-11-07",
+    text: "erase only this outline",
+  });
+  await fixture("capture", {
+    userId: neighbor.userId,
+    attemptId: randomUUID(),
+    date: "2026-11-07",
+    text: "keep this outline",
+  });
+  const shard = await mf.unsafeGetDurableObjectStorage(
+    "capture-test",
+    "ShardDO",
+    { name: userId },
+  );
+  const neighborShard = await mf.unsafeGetDurableObjectStorage(
+    "capture-test",
+    "ShardDO",
+    { name: neighbor.userId },
+  );
+  for (const storage of [shard, neighborShard]) {
+    await storage.exec("CREATE TABLE retained_test (value TEXT)");
+    await storage.exec("INSERT INTO retained_test VALUES ('retain me')");
+  }
+  const namespace = await mf.getDurableObjectNamespace("SHARD");
+  expect(
+    (await namespace.get(namespace.idFromName(userId)).fetch("http://fixture/"))
+      .status,
+  ).toBe(404);
+  await mf.unsafeEvictDurableObject("capture-test", "ShardDO", {
+    name: userId,
+  });
+  expect(await shard.exec("SELECT value FROM retained_test")).toEqual([
+    { value: "retain me" },
+  ]);
+
+  const refused = await mf.dispatchFetch(
+    "http://fixture/api/auth/delete-user",
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin: "http://fixture",
+        cookie,
+      },
+      body: JSON.stringify({ password: "wrong password" }),
+    },
+  );
+  expect(refused.status).not.toBe(200);
+  expect(await shard.exec("SELECT value FROM retained_test")).toEqual([
+    { value: "retain me" },
+  ]);
+  const deleted = await mf.dispatchFetch(
+    "http://fixture/api/auth/delete-user",
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin: "http://fixture",
+        cookie,
+      },
+      body: JSON.stringify({ password }),
+    },
+  );
+  expect(deleted.status, await deleted.clone().text()).toBe(200);
+  expect(
+    await db.prepare('SELECT id FROM "user" WHERE id=?').bind(userId).first(),
+  ).toBeNull();
+  expect(
+    await shard.exec(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='retained_test'",
+    ),
+  ).toEqual([]);
+  const classic = await mf.unsafeGetDurableObjectStorage(
+    "capture-test",
+    "UserOutlineDO",
+    { name: userId },
+  );
+  expect(
+    await classic.exec(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('nodes','kv','changelog')",
+    ),
+  ).toEqual([]);
+  expect(await neighborShard.exec("SELECT value FROM retained_test")).toEqual([
+    { value: "retain me" },
+  ]);
+  expect(
+    (
+      await fixture<Inspection>("inspect", { userId: neighbor.userId })
+    ).snapshot.nodes.some((node) => node.text === "keep this outline"),
+  ).toBe(true);
+});
+
+test("persisted cutover receipts still prevent replacing a recovered outline", async () => {
+  for (const marker of ["preserve_classic_receipt", "lunora_retired"]) {
+    const { userId } = await account();
+    await fixture("capture", {
+      userId,
+      attemptId: randomUUID(),
+      date: "2026-11-07",
+      text: "recovered content",
+    });
+    const before = (await fixture<Inspection>("inspect", { userId })).snapshot;
+    const storage = await mf.unsafeGetDurableObjectStorage(
+      "capture-test",
+      "UserOutlineDO",
+      { name: userId },
+    );
+    await storage.exec(
+      "INSERT INTO meta (key,value) VALUES (?,?)",
+      marker,
+      "completed-cutover",
+    );
+    const response = await mf.dispatchFetch(
+      "http://fixture/fixture/restore-snapshot",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ userId }),
+      },
+    );
+    expect(response.status).toBe(500);
+    expect(
+      (await fixture<Inspection>("inspect", { userId })).snapshot.nodes,
+    ).toEqual(before.nodes);
+  }
+});
+
+test("HTTP PATCH rejects an invalid batch without partial writes, then clears nullable fields without changing identity", async () => {
+  const userId = randomUUID();
+  const password = "disposable-patch-password";
+  await fixture("seed", { userId, password: await hashPassword(password) });
+  const capture = await fixture<CaptureResult>("capture", {
+    userId,
+    attemptId: randomUUID(),
+    date: "2026-11-07",
+    text: "Original content",
+  });
+  if ("error" in capture)
+    throw new Error(`fixture capture failed: ${capture.error}`);
+  const { nodeId } = capture.receipt;
+  const signin = await mf.dispatchFetch(
+    "http://fixture/api/auth/sign-in/email",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: "http://fixture" },
+      body: JSON.stringify({ email: `${userId}@capture.test`, password }),
+    },
+  );
+  expect(signin.status).toBe(200);
+  const cookie = signin.headers
+    .getSetCookie()
+    .map((value) => value.split(";")[0])
+    .join("; ");
+  const patch = (updates: unknown[]) =>
+    mf.dispatchFetch("http://fixture/api/nodes", {
+      method: "PATCH",
+      headers: {
+        "content-type": "application/json",
+        origin: "http://fixture",
+        cookie,
+      },
+      body: JSON.stringify({ updates }),
+    });
+  const before = (await fixture<Inspection>("inspect", { userId })).snapshot;
+  const rejected = await patch([
+    { id: nodeId, changes: { text: "Must not land" } },
+    { id: nodeId, changes: { completed: "false" } },
+  ]);
+  expect(rejected.status).toBe(400);
+  expect(
+    (await fixture<Inspection>("inspect", { userId })).snapshot.nodes,
+  ).toEqual(before.nodes);
+  const updated = await patch([
+    {
+      id: nodeId,
+      changes: {
+        text: "Updated content",
+        kind: "paragraph",
+        bookmarkedAt: 123,
+      },
+    },
+  ]);
+  expect(updated.status).toBe(200);
+  const cleared = await patch([
+    {
+      id: nodeId,
+      changes: {
+        kind: null,
+        bookmarkedAt: null,
+        completed: false,
+        id: "forged-id",
+        origin: "forged-agent",
+      },
+    },
+  ]);
+  expect(cleared.status).toBe(200);
+  const after = (await fixture<Inspection>("inspect", { userId })).snapshot
+    .nodes;
+  expect(after.find((node) => node.id === nodeId)).toMatchObject({
+    text: "Updated content",
+    kind: null,
+    bookmarkedAt: null,
+    completed: false,
+    origin: null,
+  });
+  expect(after.some((node) => node.id === "forged-id")).toBe(false);
+});
+
+test("feedback widget config requires the pinned real session, not email, admin status or a claimed identity", async () => {
+  const password = "disposable-feedback-password";
+  const cookies: string[] = [];
+  for (const userId of ["feedback-owner", "feedback-other"]) {
+    await fixture("seed", { userId, password: await hashPassword(password) });
+    const signin = await mf.dispatchFetch(
+      "http://fixture/api/auth/sign-in/email",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          origin: "http://fixture",
+        },
+        body: JSON.stringify({ email: `${userId}@capture.test`, password }),
+      },
+    );
+    expect(signin.status).toBe(200);
+    cookies.push(
+      signin.headers
+        .getSetCookie()
+        .map((c) => c.split(";")[0])
+        .join("; "),
+    );
+  }
+  const request = (cookie = "", method = "GET") =>
+    mf.dispatchFetch(
+      "http://fixture/api/feedback-widget?userId=feedback-owner",
+      {
+        method,
+        headers: {
+          cookie,
+          "x-user-id": "feedback-owner",
+          origin: "http://fixture",
+        },
+      },
+    );
+  for (const cookie of ["", "better-auth.session_token=forged", cookies[1]]) {
+    const denied = await request(cookie);
+    expect(denied.status).toBe(404);
+    expect(denied.headers.get("cache-control")).toBe("private, no-store");
+    expect(await denied.json()).toEqual({ error: "not found" });
+  }
+  const allowed = await request(cookies[0]);
+  expect(allowed.status).toBe(200);
+  expect(allowed.headers.get("cache-control")).toBe("private, no-store");
+  expect(await allowed.json()).toEqual({
+    userId: "feedback-owner",
+    clientId: "client_TestReview",
+  });
+  const wrongMethod = await request(cookies[0], "POST");
+  expect(wrongMethod.status).toBe(405);
+  expect(wrongMethod.headers.get("allow")).toBe("GET");
+  const signedOut = await mf.dispatchFetch("http://fixture/api/auth/sign-out", {
+    method: "POST",
+    headers: {
+      cookie: cookies[0],
+      origin: "http://fixture",
+      "content-type": "application/json",
+    },
+    body: "{}",
+  });
+  expect(signedOut.status).toBe(200);
+  expect((await request(cookies[0])).status).toBe(404);
+});
+
+test("free-account HTTP capture honors explicit date and has decisive idempotency", async () => {
+  const { userId, key } = await account();
+  const attemptId = randomUUID();
+  const payload = { attemptId, date: "2024-02-29", text: "same attempt" };
+  const [left, right] = await Promise.all([
+    api("/api/capture", key, payload),
+    api("/api/capture", key, payload),
+  ]);
+  expect([left.response.status, right.response.status]).toEqual([200, 200]);
+  expect(new Set([left.body!.nodeId, right.body!.nodeId]).size).toBe(1);
+  expect([left.body!.replayed, right.body!.replayed].sort()).toEqual([
+    false,
+    true,
+  ]);
+
+  const fresh = await api("/api/capture", key, {
+    ...payload,
+    attemptId: randomUUID(),
+  });
+  expect(fresh.response.status).toBe(200);
+  expect(fresh.body!.nodeId).not.toBe(left.body!.nodeId);
+  const conflict = await api("/api/capture", key, {
+    ...payload,
+    text: "changed",
+  });
+  expect(conflict.response.status).toBe(409);
+
+  const { snapshot } = await fixture<Inspection>("inspect", { userId });
+  expect(
+    snapshot.nodes.filter((node) => node.text === "same attempt"),
+  ).toHaveLength(2);
+  const daily = snapshot.kv.filter((row) => row.collection === "daily-index");
+  expect(daily.filter((row) => row.key === "2024-02-29")).toHaveLength(1);
+  expect(daily.map((row) => row.key).sort()).toEqual([
+    "2024",
+    "2024-02",
+    "2024-02-29",
+    "container",
+    "week:2024-02-26",
+  ]);
+});
+
+test("Markdown capture creates typed nodes atomically and replays the whole forest", async () => {
+  const { userId, key } = await account();
+  const payload = {
+    attemptId: randomUUID(),
+    date: "2024-02-29",
+    text: "- [ ] fumadocs - demo components with controls for #yvp\n  - [X] **Reviewed**\n- [ ] Document dissonance with standup #yvp\n# Notes\nKeep [authored](https://example.com) and #tags\n```\n- [ ] literal\n```",
+  };
+  const saved = await api("/api/capture", key, payload);
+  expect(saved.response.status).toBe(200);
+  const replay = await api("/api/capture", key, payload);
+  expect(replay.body).toEqual({ ...saved.body, replayed: true });
+  const { snapshot } = await fixture<Inspection>("inspect", { userId });
+  const first = snapshot.nodes.find((node) => node.id === saved.body!.nodeId)!;
+  expect(first).toMatchObject({
+    text: "fumadocs - demo components with controls for #yvp",
+    parentId: saved.body!.dailyNoteId,
+    isTask: true,
+    completed: false,
+    kind: null,
+    origin: null,
+  });
+  expect(
+    snapshot.nodes.filter((node) => node.parentId === first.id),
+  ).toMatchObject([
+    { text: "**Reviewed**", isTask: true, completed: true, kind: null },
+  ]);
+  const roots = snapshot.nodes.filter(
+    (node) => node.parentId === saved.body!.dailyNoteId,
+  );
+  expect(roots).toMatchObject([
+    { id: first.id },
+    {
+      text: "Document dissonance with standup #yvp",
+      isTask: true,
+      completed: false,
+      prevSiblingId: first.id,
+    },
+    { text: "Notes", isTask: false, kind: null },
+  ]);
+  expect(
+    snapshot.nodes.filter((node) => node.parentId === roots[2]!.id),
+  ).toMatchObject([
+    {
+      text: "Keep [authored](https://example.com) and #tags",
+      kind: "paragraph",
+    },
+    { text: "```", kind: null },
+    { text: "- [ ] literal", isTask: false, completed: false, kind: null },
+    { text: "```", kind: null },
+  ]);
+  expect(snapshot.nodes).toHaveLength(13);
+  assertSiblingChains(snapshot.nodes);
+});
+
+test("Markdown capture enriches later roots and children but skips literal and authored labels", async () => {
+  const { userId, key } = await account();
+  const prefix = `https://fixture.unfurl.test/${randomUUID()}`;
+  const payload = {
+    attemptId: randomUUID(),
+    date: "2026-11-09",
+    text: `- Notes\n  - [ ] Read ${prefix}/child\n- Later ${prefix}/later\n\`\`\`\n${prefix}/literal\n\`\`\`\n[Authored](${prefix}/authored)\nAfter ${prefix}/after`,
+  };
+  const saved = await api("/api/capture", key, payload);
+  expect(saved.response.status).toBe(200);
+  let texts: string[] = [];
+  const deadline = performance.now() + 3_000;
+  do {
+    const { snapshot } = await fixture<Inspection>("inspect", { userId });
+    texts = snapshot.nodes.map((node) => node.text);
+    if (texts.includes(`After [Ordinary page](${prefix}/after)`)) break;
+  } while (performance.now() < deadline);
+  expect(texts).toContain(`Read [Ordinary page](${prefix}/child)`);
+  expect(texts).toContain(`Later [Ordinary page](${prefix}/later)`);
+  expect(texts).toContain(`After [Ordinary page](${prefix}/after)`);
+  expect(texts).toContain(`${prefix}/literal`);
+  expect(texts).toContain(`[Authored](${prefix}/authored)`);
+  expect(outboundUrls.filter((url) => url.startsWith(prefix))).toEqual([
+    `${prefix}/child`,
+    `${prefix}/later`,
+    `${prefix}/after`,
+  ]);
+  expect((await api("/api/capture", key, payload)).body!.replayed).toBe(true);
+});
+
+test("concurrent distinct captures make one scaffold and a valid sibling chain", async () => {
+  const { userId, key } = await account();
+  const requests = Array.from({ length: 8 }, (_, index) =>
+    api("/api/capture", key, {
+      attemptId: randomUUID(),
+      date: "2026-10-03",
+      text: `capture ${index}`,
+    }),
+  );
+  const results = await Promise.all(requests);
+  expect(results.every(({ response }) => response.status === 200)).toBe(true);
+  const { snapshot } = await fixture<Inspection>("inspect", { userId });
+  expect(
+    snapshot.nodes.filter((node) => node.text.startsWith("capture ")),
+  ).toHaveLength(8);
+  expect(
+    snapshot.kv.filter((row) => row.collection === "daily-index"),
+  ).toHaveLength(5);
+  assertSiblingChains(snapshot.nodes);
+});
+
+test("replay after user edit or deletion preserves that state", async () => {
+  const { userId, key } = await account();
+  const editedAttempt = randomUUID();
+  const deletedAttempt = randomUUID();
+  const first = await api("/api/capture", key, {
+    attemptId: editedAttempt,
+    date: "2026-09-01",
+    text: "edit me",
+  });
+  const second = await api("/api/capture", key, {
+    attemptId: deletedAttempt,
+    date: "2026-09-01",
+    text: "delete me",
+  });
+  await fixture("edit", {
+    userId,
+    nodeId: first.body!.nodeId,
+    updatedText: "user edit",
+  });
+  await fixture("delete", { userId, nodeId: second.body!.nodeId });
+  expect(
+    (
+      await api("/api/capture", key, {
+        attemptId: editedAttempt,
+        date: "2026-09-01",
+        text: "edit me",
+      })
+    ).body!.replayed,
+  ).toBe(true);
+  expect(
+    (
+      await api("/api/capture", key, {
+        attemptId: deletedAttempt,
+        date: "2026-09-01",
+        text: "delete me",
+      })
+    ).body!.replayed,
+  ).toBe(true);
+  const { snapshot } = await fixture<Inspection>("inspect", { userId });
+  expect(
+    snapshot.nodes.find((node) => node.id === first.body!.nodeId)?.text,
+  ).toBe("user edit");
+  expect(snapshot.nodes.some((node) => node.id === second.body!.nodeId)).toBe(
+    false,
+  );
+});
+
+test("quota refusal rolls back receipt and all scaffold rows", async () => {
+  const userId = randomUUID();
+  await fixture("seed", { userId });
+  const attemptId = randomUUID();
+  const refused = await fixture<CaptureResult>("capture", {
+    userId,
+    attemptId,
+    date: "2026-08-12",
+    text: "- [x] first\n  - [ ] nested\n- last",
+    limit: 7,
+  });
+  expect(refused).toEqual({ error: "node_limit" });
+  let inspection = await fixture<Inspection>("inspect", { userId });
+  expect(inspection.snapshot.nodes).toEqual([]);
+  expect(inspection.snapshot.kv).toEqual([]);
+  const retry = await fixture<{
+    receipt: { nodeId: string };
+    replayed: boolean;
+  }>("capture", {
+    userId,
+    attemptId,
+    date: "2026-08-12",
+    text: "- [x] first\n  - [ ] nested\n- last",
+    limit: 8,
+  });
+  expect(retry.replayed).toBe(false);
+  inspection = await fixture<Inspection>("inspect", { userId });
+  expect(
+    inspection.snapshot.nodes.some((node) => node.id === retry.receipt.nodeId),
+  ).toBe(true);
+  expect(inspection.snapshot.nodes).toHaveLength(8);
+});
+
+test("title upgrade only changes the untouched captured node", async () => {
+  const userId = randomUUID();
+  await fixture("seed", { userId });
+  const untouched = randomUUID();
+  const edited = randomUUID();
+  const deleted = randomUUID();
+  const a = await fixture<{ receipt: { nodeId: string } }>("capture", {
+    userId,
+    attemptId: untouched,
+    date: "2026-07-01",
+    text: "raw",
+  });
+  const b = await fixture<{ receipt: { nodeId: string } }>("capture", {
+    userId,
+    attemptId: edited,
+    date: "2026-07-01",
+    text: "raw edit",
+  });
+  const c = await fixture<{ receipt: { nodeId: string } }>("capture", {
+    userId,
+    attemptId: deleted,
+    date: "2026-07-01",
+    text: "raw delete",
+  });
+  await fixture("edit", {
+    userId,
+    nodeId: b.receipt.nodeId,
+    updatedText: "mine",
+  });
+  await fixture("delete", { userId, nodeId: c.receipt.nodeId });
+  expect(
+    await fixture<{ upgraded: boolean }>("upgrade", {
+      userId,
+      attemptId: untouched,
+      expected: "raw",
+      updatedText: "title",
+    }),
+  ).toEqual({ upgraded: true });
+  expect(
+    await fixture<{ upgraded: boolean }>("upgrade", {
+      userId,
+      attemptId: edited,
+      expected: "raw edit",
+      updatedText: "bad",
+    }),
+  ).toEqual({ upgraded: false });
+  expect(
+    await fixture<{ upgraded: boolean }>("upgrade", {
+      userId,
+      attemptId: deleted,
+      expected: "raw delete",
+      updatedText: "bad",
+    }),
+  ).toEqual({ upgraded: false });
+  const { snapshot } = await fixture<Inspection>("inspect", { userId });
+  expect(
+    snapshot.nodes.find((node) => node.id === a.receipt.nodeId)?.text,
+  ).toBe("title");
+  expect(
+    snapshot.nodes.find((node) => node.id === b.receipt.nodeId)?.text,
+  ).toBe("mine");
+});
+
+test("generic link upgrade compares current text atomically and never recreates deleted nodes", async () => {
+  const userId = randomUUID();
+  await fixture("seed", { userId });
+  const created = await fixture<{ receipt: { nodeId: string } }>("capture", {
+    userId,
+    attemptId: randomUUID(),
+    date: "2026-10-08",
+    text: "Read https://first.test",
+  });
+  const nodeId = created.receipt.nodeId;
+  expect(
+    await fixture<{ upgraded: boolean }>("upgrade-link", {
+      userId,
+      nodeId,
+      expected: "Read https://first.test",
+      updatedText: "Read [First](https://first.test)",
+    }),
+  ).toEqual({ upgraded: true });
+  await fixture("edit", { userId, nodeId, updatedText: "My custom text" });
+  expect(
+    await fixture<{ upgraded: boolean }>("upgrade-link", {
+      userId,
+      nodeId,
+      expected: "Read [First](https://first.test)",
+      updatedText: "Late result",
+    }),
+  ).toEqual({ upgraded: false });
+  const { snapshot } = await fixture<Inspection>("inspect", { userId });
+  expect(snapshot.nodes.find((node) => node.id === nodeId)?.text).toBe(
+    "My custom text",
+  );
+  await fixture("edit", {
+    userId,
+    nodeId,
+    updatedText: "https://example.com/",
+    kind: "embed",
+  });
+  expect(
+    await fixture<{ upgraded: boolean }>("upgrade-link", {
+      userId,
+      nodeId,
+      expected: "https://example.com/",
+      updatedText: "[Title](https://example.com/)",
+    }),
+  ).toEqual({ upgraded: false });
+  await fixture("delete", { userId, nodeId });
+  expect(
+    await fixture<{ upgraded: boolean }>("upgrade-link", {
+      userId,
+      nodeId,
+      expected: "My custom text",
+      updatedText: "Resurrection",
+    }),
+  ).toEqual({ upgraded: false });
+  const after = await fixture<Inspection>("inspect", { userId });
+  expect(after.snapshot.nodes.some((node) => node.id === nodeId)).toBe(false);
+});
+
+test("unfurl rejects X before cache reads and on redirect hops, while ordinary pages still unfurl", async () => {
+  outboundUrls.length = 0;
+  for (const target of [
+    "https://x.com/jack/status/20",
+    "https://twitter.com/jack/status/20",
+    "https://mobile.twitter.com/jack/status/20",
+  ]) {
+    expect(
+      await fixture<{ title: string | null }>("unfurl", {
+        userId: "unfurl",
+        text: target,
+      }),
+    ).toEqual({ title: null });
+    expect(outboundUrls).toEqual([]);
+    expect(
+      await fixture<{ title: string | null }>("unfurl", {
+        userId: "unfurl",
+        text: target,
+        cachedTitle: "Legacy tweet-derived title",
+      }),
+    ).toEqual({ title: null });
+    expect(outboundUrls).toEqual([]);
+    const redirect = `https://fixture.unfurl.test/?redirect=${encodeURIComponent(target)}`;
+    expect(
+      await fixture<{ title: string | null }>("unfurl", {
+        userId: "unfurl",
+        text: redirect,
+      }),
+    ).toEqual({ title: null });
+    expect(outboundUrls).toEqual([redirect]);
+    outboundUrls.length = 0;
+  }
+  expect(
+    await fixture<{ title: string | null }>("unfurl", {
+      userId: "unfurl",
+      text: "https://fixture.unfurl.test/ordinary",
+    }),
+  ).toEqual({ title: "Ordinary page" });
+  expect(outboundUrls).toEqual(["https://fixture.unfurl.test/ordinary"]);
+});
+
+test.skipIf(!process.env.LIVE_EMBEDS)(
+  "live official oEmbed responses return provider descriptors",
+  async () => {
+    const urls = [
+      ["youtube", "https://www.youtube.com/watch?v=M7lc1UVf-VE&t=90"],
+      ["vimeo", "https://vimeo.com/22439234"],
+      ["spotify", "https://open.spotify.com/episode/7makk4oTQel546B0PZlDM5"],
+    ] as const;
+    for (const [provider, url] of urls) {
+      const response = await fixture<{ embed: EmbedDescriptor | null }>(
+        "embed",
+        {
+          userId: "live-smoke",
+          text: url,
+        },
+      );
+      expect(response.embed, provider).not.toBeNull();
+      expect(response.embed?.provider).toBe(provider);
+      if (provider === "youtube")
+        expect(response.embed?.src).toContain("start=90");
+    }
+  },
+  120000,
+);
+
+test("key storage, expiry boundary, revocation, tenant isolation, and password version fail closed", async () => {
+  const first = await account();
+  // Retained dfc_ secrets still authenticate alongside newly issued dfk_ keys.
+  first.key = first.key.replace("dfk_", "dfc_");
+  const db = await mf.getD1Database("DB");
+  await db
+    .prepare("UPDATE capture_key SET hash=? WHERE id=?")
+    .bind(await captureDigest(first.key), first.entry.id)
+    .run();
+  const second = await account();
+  const exact = 2_000_000_000_000;
+  const expiring = await fixture<Key>("key", {
+    userId: first.userId,
+    expiresAt: exact,
+  });
+  expect(
+    await fixture<{ authenticated: boolean }>("auth", {
+      userId: first.userId,
+      authorization: `Bearer ${expiring.key}`,
+      now: exact - 1,
+    }),
+  ).toEqual({ authenticated: true });
+  expect(
+    await fixture<{ authenticated: boolean }>("auth", {
+      userId: first.userId,
+      authorization: `Bearer ${expiring.key}`,
+      now: exact,
+    }),
+  ).toEqual({ authenticated: false });
+  const inspection = await fixture<Inspection>("inspect", {
+    userId: first.userId,
+  });
+  expect(JSON.stringify(inspection.keys)).not.toContain(first.key);
+  expect(inspection.keys[0]!.hash).toMatch(/^[0-9a-f]{64}$/);
+  const listed = await fixture<{ keys: unknown[] }>("manage", {
+    userId: first.userId,
+    manageMethod: "GET",
+  });
+  expect(JSON.stringify(listed)).not.toContain(first.key);
+
+  await fixture("manage", {
+    userId: second.userId,
+    manageMethod: "DELETE",
+    manageBody: { id: first.entry.id },
+  });
+  expect(
+    (
+      await api("/api/capture", first.key, {
+        attemptId: randomUUID(),
+        date: "2026-01-01",
+        text: "still valid",
+      })
+    ).response.status,
+  ).toBe(200);
+  await fixture("manage", {
+    userId: first.userId,
+    manageMethod: "DELETE",
+    manageBody: { id: first.entry.id },
+  });
+  expect(
+    (
+      await api("/api/capture", first.key, {
+        attemptId: randomUUID(),
+        date: "2026-01-01",
+        text: "revoked",
+      })
+    ).response.status,
+  ).toBe(401);
+  await fixture("manage", {
+    userId: second.userId,
+    manageMethod: "DELETE",
+    manageBody: {},
+  });
+  expect(
+    (
+      await api("/api/capture", second.key, {
+        attemptId: randomUUID(),
+        date: "2026-01-01",
+        text: "revoked all",
+      })
+    ).response.status,
+  ).toBe(401);
+
+  const replacement = await fixture<Key>("key", { userId: first.userId });
+  await fixture("password", { userId: first.userId, password: "password-v2" });
+  expect(
+    (
+      await api("/api/capture", replacement.key, {
+        attemptId: randomUUID(),
+        date: "2026-01-01",
+        text: "stale key",
+      })
+    ).response.status,
+  ).toBe(401);
+});
+
+test("real password change and reset revoke keys; sign-out does not", async () => {
+  const email = `${randomUUID()}@capture.test`;
+  const password = "disposable-test-password-1";
+  type AuthBody = {
+    name?: string;
+    email?: string;
+    password?: string;
+    currentPassword?: string;
+    newPassword?: string;
+    redirectTo?: string;
+    token?: string;
+  };
+  const auth = (path: string, body: AuthBody, cookie?: string) => {
+    const headers = new Headers({
+      "content-type": "application/json",
+      origin: "http://fixture",
+    });
+    if (cookie) headers.set("cookie", cookie);
+    return mf.dispatchFetch(`http://fixture/api/auth/${path}`, {
+      method: "POST",
+      headers: Object.fromEntries(headers),
+      body: JSON.stringify(body),
+    });
+  };
+  const signup = await auth("sign-up/email", {
+    name: "Capture test",
+    email,
+    password,
+  });
+  expect(signup.status, await signup.clone().text()).toBe(200);
+  const db = await mf.getD1Database("DB");
+  const user = await db
+    .prepare('SELECT id FROM "user" WHERE email=?')
+    .bind(email)
+    .first<{ id: string }>();
+  expect(user).not.toBeNull();
+  const userId = user!.id;
+  await db
+    .prepare('UPDATE "user" SET emailVerified=1 WHERE id=?')
+    .bind(userId)
+    .run();
+  const signin = await auth("sign-in/email", { email, password });
+  expect(signin.status).toBe(200);
+  const cookie = signin.headers
+    .getSetCookie()
+    .map((value) => value.split(";")[0])
+    .join("; ");
+  const beforeCreation = Date.now();
+  const created = await mf.dispatchFetch("http://fixture/api/keys", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      origin: "http://fixture",
+      cookie,
+    },
+    // Omitting expiry exercises the canonical route's secure default.
+    body: JSON.stringify({ name: "Read-only automation", permission: "read" }),
+  });
+  expect(created.status).toBe(201);
+  // SAFETY: The real creation handler returns the key contract verified below.
+  let first = (await created.json()) as Key & { entry: CaptureKeyEntry };
+  expect(first.entry.permission).toBe("read");
+  expect(first.entry.expiresAt).toBeGreaterThanOrEqual(
+    beforeCreation + 30 * 86400000,
+  );
+  expect(first.entry.expiresAt).toBeLessThanOrEqual(Date.now() + 30 * 86400000);
+  const handshake = await mf.dispatchFetch("http://fixture/mcp", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${first.key}`,
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {},
+    }),
+  });
+  expect(handshake.status).toBe(200);
+  expect(await handshake.text()).toContain("protocolVersion");
+  type RotationRequest = { id: string; expiry?: string; permission?: string };
+  const rotate = (
+    body: RotationRequest,
+    path = "/api/keys",
+    origin = "http://fixture",
+  ) =>
+    mf.dispatchFetch(`http://fixture${path}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json", origin, cookie },
+      body: JSON.stringify(body),
+    });
+  const foreign = await account();
+  expect((await rotate({ id: foreign.entry.id })).status).toBe(404);
+  expect(
+    (await rotate({ id: first.entry.id }, "/api/capture-keys")).status,
+  ).toBe(405);
+  expect(
+    (await rotate({ id: first.entry.id }, "/api/keys", "https://evil.test"))
+      .status,
+  ).toBe(403);
+  expect(
+    (await rotate({ id: first.entry.id, permission: "write" })).status,
+  ).toBe(400);
+  expect((await rotate({ id: first.entry.id, expiry: "never" })).status).toBe(
+    400,
+  );
+  await db
+    .prepare('UPDATE "session" SET createdAt = ? WHERE userId = ?')
+    .bind(new Date(Date.now() - 86400001).toISOString(), userId)
+    .run();
+  expect((await rotate({ id: first.entry.id })).status).toBe(401);
+  await db
+    .prepare('UPDATE "session" SET createdAt = ? WHERE userId = ?')
+    .bind(new Date().toISOString(), userId)
+    .run();
+  const oldKey = first.key;
+  const beforeRotation = Date.now();
+  const rotation = await rotate({ id: first.entry.id, expiry: "90d" });
+  expect(rotation.status).toBe(200);
+  // SAFETY: The real rotation response uses the creation contract; assertions verify its grant and lifetime.
+  const rotated = (await rotation.json()) as Key & { entry: CaptureKeyEntry };
+  expect(rotated.key).not.toBe(oldKey);
+  expect(rotated.entry.id).toBe(first.entry.id);
+  expect(rotated.entry.name).toBe("Read-only automation");
+  expect(rotated.entry.permission).toBe("read");
+  expect(rotated.entry.expiresAt).toBeGreaterThanOrEqual(
+    beforeRotation + 90 * 86400000,
+  );
+  expect(rotated.entry.expiresAt).toBeLessThanOrEqual(
+    Date.now() + 90 * 86400000,
+  );
+  expect(
+    await fixture<{ authenticated: boolean }>("auth", {
+      userId,
+      authorization: `Bearer ${oldKey}`,
+    }),
+  ).toEqual({ authenticated: false });
+  expect(
+    await fixture<{ authenticated: boolean }>("auth", {
+      userId,
+      authorization: `Bearer ${rotated.key}`,
+    }),
+  ).toEqual({ authenticated: true });
+  const deniedRotation = await mf.dispatchFetch("http://fixture/api/keys", {
+    method: "PATCH",
+    headers: {
+      "content-type": "application/json",
+      origin: "http://fixture",
+      authorization: `Bearer ${rotated.key}`,
+    },
+    body: JSON.stringify({ id: rotated.entry.id }),
+  });
+  expect(deniedRotation.status).toBe(401);
+  await db
+    .prepare("UPDATE capture_key SET expiresAt = ? WHERE id = ?")
+    .bind(Date.now() - 1, rotated.entry.id)
+    .run();
+  const renewed = await rotate({ id: rotated.entry.id });
+  expect(renewed.status).toBe(200);
+  // SAFETY: This is the same real rotation response contract, now exercising an expired key and default lifetime.
+  first = (await renewed.json()) as Key & { entry: CaptureKeyEntry };
+  expect(first.entry.permission).toBe("read");
+  expect(first.entry.expiresAt - first.entry.createdAt).toBe(30 * 86400000);
+  expect(
+    await fixture<{ authenticated: boolean }>("auth", {
+      userId,
+      authorization: `Bearer ${first.key}`,
+    }),
+  ).toEqual({ authenticated: true });
+  const listing = await mf.dispatchFetch("http://fixture/api/keys", {
+    headers: { cookie },
+  });
+  expect(listing.status).toBe(200);
+  expect(await listing.text()).not.toContain(first.key);
+  const refused = await auth(
+    "change-password",
+    {
+      currentPassword: "incorrect-password",
+      newPassword: "disposable-test-password-2",
+    },
+    cookie,
+  );
+  expect(refused.status).not.toBe(200);
+  expect((await fixture<Inspection>("inspect", { userId })).keys).toHaveLength(
+    1,
+  );
+  const changed = await auth(
+    "change-password",
+    { currentPassword: password, newPassword: "disposable-test-password-2" },
+    cookie,
+  );
+  expect(changed.status, await changed.clone().text()).toBe(200);
+  expect((await fixture<Inspection>("inspect", { userId })).keys).toHaveLength(
+    0,
+  );
+  expect(
+    await fixture<{ authenticated: boolean }>("auth", {
+      userId,
+      authorization: `Bearer ${first.key}`,
+    }),
+  ).toEqual({ authenticated: false });
+
+  const second = await fixture<Key>("key", { userId });
+  const signedOut = await auth("sign-out", {}, cookie);
+  expect(signedOut.status).toBe(200);
+  expect(
+    await fixture<{ authenticated: boolean }>("auth", {
+      userId,
+      authorization: `Bearer ${second.key}`,
+    }),
+  ).toEqual({ authenticated: true });
+  const requested = await auth("request-password-reset", {
+    email,
+    redirectTo: "http://fixture/reset-password",
+  });
+  expect(requested.status, await requested.clone().text()).toBe(200);
+  const token = await db
+    .prepare(
+      "SELECT identifier FROM verification WHERE value=? AND identifier LIKE 'reset-password:%'",
+    )
+    .bind(userId)
+    .first<{ identifier: string }>();
+  expect(token).not.toBeNull();
+  const reset = await auth("reset-password", {
+    token: token!.identifier.slice("reset-password:".length),
+    newPassword: "disposable-test-password-3",
+  });
+  expect(reset.status, await reset.clone().text()).toBe(200);
+  expect((await fixture<Inspection>("inspect", { userId })).keys).toHaveLength(
+    0,
+  );
+  expect(
+    await fixture<{ authenticated: boolean }>("auth", {
+      userId,
+      authorization: `Bearer ${second.key}`,
+    }),
+  ).toEqual({ authenticated: false });
+});
+
+test("capture key is scoped away from every other production API", async () => {
+  const { key } = await account();
+  for (const path of [
+    "/mcp",
+    "/api/nodes",
+    "/api/kv?collection=daily-index",
+    "/api/capture-keys",
+  ]) {
+    const { response } = await api(path, key);
+    expect(response.status, path).toBe(401);
+  }
+});
+
+test("invalid capture input creates no nodes; key management enforces origin and freshness", async () => {
+  const { userId, key } = await account();
+  for (const body of [
+    { attemptId: randomUUID(), date: "2026-02-30", text: "impossible" },
+    { attemptId: randomUUID(), date: "2026-1-01", text: "malformed" },
+    { attemptId: randomUUID(), date: "2026-01-01", text: " \n " },
+  ])
+    expect((await api("/api/capture", key, body)).response.status).toBe(400);
+  expect(
+    (await fixture<Inspection>("inspect", { userId })).snapshot.nodes,
+  ).toEqual([]);
+
+  const malformedRevoke = await fixtureResponse("manage", {
+    userId,
+    manageMethod: "DELETE",
+    manageBody: { ids: ["typo"] },
+  });
+  expect(malformedRevoke.response.status).toBe(400);
+  expect((await fixture<Inspection>("inspect", { userId })).keys).toHaveLength(
+    1,
+  );
+
+  const badOrigin = await fixtureResponse<{ error: string }>("manage", {
+    userId,
+    manageMethod: "POST",
+    manageBody: { name: "bad", expiry: "never" },
+    origin: "https://evil.test",
+  });
+  expect(badOrigin.response.status).toBe(403);
+  expect(badOrigin.body.error).toBe("invalid_origin");
+  const stale = await fixtureResponse<{ error: string }>("manage", {
+    userId,
+    manageMethod: "POST",
+    manageBody: { name: "old", expiry: "never" },
+    sessionCreatedAt: Date.now() - 86_400_000,
+  });
+  expect(stale.response.status).toBe(401);
+  expect(stale.body.error).toBe("fresh_session_required");
+  const fresh = await fixtureResponse<Key>("manage", {
+    userId,
+    manageMethod: "POST",
+    manageBody: { name: "fresh", expiry: "30d" },
+    sessionCreatedAt: Date.now(),
+  });
+  expect(fresh.response.status).toBe(201);
+  expect(fresh.body.key).toMatch(/^dfk_[0-9a-f]{64}$/);
+  const escalation = await fixtureResponse("manage", {
+    userId,
+    manageMethod: "POST",
+    manageBody: { name: "legacy route", expiry: "30d", permission: "write" },
+  });
+  expect(escalation.response.status).toBe(400);
+});
+
+test("OAuth discovery, explicit account-bound consent, refresh rotation and isolated revocation", async () => {
+  const db = await mf.getD1Database("DB");
+  const origin = "http://fixture";
+  for (const path of ["/mcp", "/api/mcp"]) {
+    const denied = await mf.dispatchFetch(`${origin}${path}`, {
+      method: "POST",
+    });
+    expect(denied.status).toBe(401);
+    const metadataUrl = denied.headers
+      .get("www-authenticate")!
+      .match(/resource_metadata="([^"]+)"/)![1]!;
+    expect(await (await mf.dispatchFetch(metadataUrl)).json()).toMatchObject({
+      resource: `${origin}${path}`,
+      authorization_servers: [origin],
+    });
+  }
+  expect(
+    await (
+      await mf.dispatchFetch(`${origin}/.well-known/oauth-protected-resource`)
+    ).json(),
+  ).toMatchObject({ resource: `${origin}/mcp` });
+  const cookies: [string, string] = ["", ""];
+  const users = [];
+  for (let i = 0; i < 2; i++) {
+    const userId = randomUUID();
+    const password = "oauth-fixture-password";
+    await fixture("seed", { userId, password: await hashPassword(password) });
+    users.push(userId);
+    const response = await mf.dispatchFetch(
+      `${origin}/api/auth/sign-in/email`,
+      {
+        method: "POST",
+        headers: { origin, "content-type": "application/json" },
+        body: JSON.stringify({
+          email: `${userId.toLowerCase()}@capture.test`,
+          password,
+        }),
+      },
+    );
+    expect(response.status).toBe(200);
+    cookies[i] = response.headers
+      .getSetCookie()
+      .map((value) => value.split(";")[0])
+      .join("; ");
+  }
+  const register = await mf.dispatchFetch(`${origin}/api/auth/mcp/register`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      client_name: "Local OAuth reviewer",
+      redirect_uris: ["https://client.example/callback?existing=1"],
+      token_endpoint_auth_method: "none",
+    }),
+  });
+  expect(register.status).toBe(201);
+  // SAFETY: This successful DCR response is produced by the real provider; its client id is used in the exercised authorization flow.
+  const client = (await register.json()) as { client_id: string };
+  const verifier = "disposable-oauth-verifier-012345678901234567890123456789";
+  const query = new URLSearchParams({
+    client_id: client.client_id,
+    response_type: "code",
+    redirect_uri: "https://client.example/callback?existing=1",
+    scope: "openid offline_access",
+    state: "unpredictable-state",
+    code_challenge: createHash("sha256").update(verifier).digest("base64url"),
+    code_challenge_method: "S256",
+    resource: `${origin}/mcp`,
+  });
+  const wrongResource = new URLSearchParams(query);
+  wrongResource.set("resource", "https://unrelated.example/mcp");
+  expect(
+    (
+      await mf.dispatchFetch(
+        `${origin}/api/auth/mcp/authorize?${wrongResource}`,
+        { headers: { cookie: cookies[0] }, redirect: "manual" },
+      )
+    ).status,
+  ).toBe(400);
+  const signedOut = await mf.dispatchFetch(
+    `${origin}/api/auth/mcp/authorize?${query}`,
+    { redirect: "manual" },
+  );
+  expect(new URL(signedOut.headers.get("location")!, origin).pathname).toBe(
+    "/",
+  );
+  expect(
+    new URL(signedOut.headers.get("location")!, origin).searchParams.get(
+      "client_id",
+    ),
+  ).toBe(client.client_id);
+  const authorize = async (cookie = cookies[0], params = query) => {
+    const response = await mf.dispatchFetch(
+      `${origin}/api/auth/mcp/authorize?${params}`,
+      { headers: { cookie }, redirect: "manual" },
+    );
+    expect(response.status).toBe(302);
+    const location = new URL(response.headers.get("location")!, origin);
+    expect(location.pathname).toBe("/mcp-consent");
+    expect(location.searchParams.has("code")).toBe(false);
+    return location.searchParams.get("consent_code")!;
+  };
+  const decide = (
+    code: string,
+    accept: boolean,
+    cookie = cookies[0],
+    requestOrigin = origin,
+  ) =>
+    mf.dispatchFetch(`${origin}/api/auth/oauth2/consent`, {
+      method: "POST",
+      headers: {
+        cookie,
+        origin: requestOrigin,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ consent_code: code, accept }),
+    });
+  const tokenRequest = (values: Record<string, string>) =>
+    mf.dispatchFetch(`${origin}/api/auth/mcp/token`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: client.client_id,
+        ...values,
+      }).toString(),
+    });
+  const exchange = (code: string, codeVerifier = verifier) =>
+    tokenRequest({
+      grant_type: "authorization_code",
+      code,
+      redirect_uri: query.get("redirect_uri")!,
+      code_verifier: codeVerifier,
+      resource: `${origin}/mcp`,
+    });
+  const pending = await authorize();
+  const withoutPkce = new URLSearchParams(query);
+  withoutPkce.delete("code_challenge");
+  withoutPkce.delete("code_challenge_method");
+  const noPkce = await mf.dispatchFetch(
+    `${origin}/api/auth/mcp/authorize?${withoutPkce}`,
+    { headers: { cookie: cookies[0] }, redirect: "manual" },
+  );
+  expect(
+    new URL(noPkce.headers.get("location")!, origin).searchParams.get("error"),
+  ).toBe("invalid_request");
+  expect(
+    (
+      await mf.dispatchFetch(`${origin}/api/mcp-consent?code=${pending}`, {
+        headers: { cookie: cookies[1] },
+      })
+    ).status,
+  ).toBe(400);
+  const details = await mf.dispatchFetch(
+    `${origin}/api/mcp-consent?code=${pending}`,
+    { headers: { cookie: cookies[0] } },
+  );
+  expect(details.headers.get("cache-control")).toBe("private, no-store");
+  expect(await details.json()).toMatchObject({
+    name: "Local OAuth reviewer",
+    redirectHost: "client.example",
+    scopes: ["openid", "offline_access"],
+  });
+  expect((await decide(pending, true, cookies[1])).status).toBe(403);
+  expect(
+    (await decide(pending, true, cookies[0], "https://evil.example")).status,
+  ).toBe(403);
+  // Consent codes cannot be exchanged as authorization codes.
+  expect((await exchange(await authorize())).status).not.toBe(200);
+  const denied = await decide(pending, false);
+  expect(denied.status).toBe(200);
+  // SAFETY: Provider consent replies contain redirectURI, whose state and query are asserted below.
+  const deniedRedirect = new URL(
+    ((await denied.json()) as { redirectURI: string }).redirectURI,
+  );
+  expect(deniedRedirect.searchParams.get("state")).toBe("unpredictable-state");
+  expect(deniedRedirect.searchParams.get("existing")).toBe("1");
+  expect(deniedRedirect.searchParams.get("error")).toBe("access_denied");
+  expect((await decide(pending, true)).status).toBe(403);
+  const expired = await authorize();
+  await db
+    .prepare("UPDATE verification SET expiresAt = ? WHERE identifier = ?")
+    .bind("2000-01-01T00:00:00.000Z", expired)
+    .run();
+  expect((await decide(expired, true)).status).toBe(403);
+  const issue = async (cookie = cookies[0]) => {
+    const consent = await decide(await authorize(cookie), true, cookie);
+    expect(consent.status).toBe(200);
+    // SAFETY: Successful provider consent returns the registered redirect, tested by the token exchange below.
+    const redirect = new URL(
+      ((await consent.json()) as { redirectURI: string }).redirectURI,
+    );
+    expect(redirect.searchParams.get("state")).toBe("unpredictable-state");
+    const response = await exchange(redirect.searchParams.get("code")!);
+    expect(
+      response.status,
+      response.status === 200 ? undefined : await response.clone().text(),
+    ).toBe(200);
+    // SAFETY: Successful token responses are exercised as real MCP access and refresh credentials below.
+    return (await response.json()) as {
+      access_token: string;
+      refresh_token: string;
+    };
+  };
+  const first = await issue();
+  const unapproved = await authorize();
+  for (const credentials of [
+    {
+      grant_type: "authorization_code",
+      code: [unapproved],
+      redirect_uri: query.get("redirect_uri")!,
+      code_verifier: verifier,
+    },
+    { grant_type: "refresh_token", refresh_token: [first.refresh_token] },
+  ]) {
+    const malformed = await mf.dispatchFetch(`${origin}/api/auth/mcp/token`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        client_id: client.client_id,
+        ...credentials,
+      }),
+    });
+    expect(malformed.status).toBe(400);
+  }
+  const otherUser = await issue(cookies[1]);
+  const mcp = (token: string, path = "/mcp") =>
+    mf.dispatchFetch(`${origin}${path}`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+  expect((await mcp(first.access_token)).status).toBe(200);
+  expect((await mcp(first.access_token, "/api/mcp")).status).toBe(200);
+  const refreshed = await tokenRequest({
+    grant_type: "refresh_token",
+    refresh_token: first.refresh_token,
+  });
+  expect(refreshed.status).toBe(200);
+  // SAFETY: The refreshed pair has the same provider contract as the first pair and is used below.
+  const current = (await refreshed.json()) as typeof first;
+  expect(
+    (
+      await tokenRequest({
+        grant_type: "refresh_token",
+        refresh_token: first.refresh_token,
+      })
+    ).status,
+  ).not.toBe(200);
+  expect((await mcp(current.access_token)).status).toBe(200);
+  const racing = await issue();
+  const competitors = await Promise.all(
+    [0, 1].map(() =>
+      tokenRequest({
+        grant_type: "refresh_token",
+        refresh_token: racing.refresh_token,
+      }),
+    ),
+  );
+  expect(
+    competitors.filter((response) => response.status === 200),
+  ).toHaveLength(1);
+  const inFlight = await authorize();
+  const workerOrigin = (await mf.ready).origin;
+  const revoke = (cookie: string, requestOrigin = workerOrigin) =>
+    mf.dispatchFetch(`${origin}/api/mcp-connections`, {
+      method: "DELETE",
+      headers: {
+        cookie,
+        origin: requestOrigin,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ clientId: client.client_id }),
+    });
+  expect((await revoke(cookies[0], "https://evil.example")).status).toBe(403);
+  const list = await mf.dispatchFetch(`${origin}/api/mcp-connections`, {
+    headers: { cookie: cookies[0] },
+  });
+  expect(await list.json()).toEqual({
+    connections: [{ clientId: client.client_id, name: "Local OAuth reviewer" }],
+  });
+  const revoked = await revoke(cookies[0]);
+  expect(revoked.status, await revoked.text()).toBe(200);
+  expect((await mcp(current.access_token)).status).toBe(401);
+  expect(
+    (
+      await tokenRequest({
+        grant_type: "refresh_token",
+        refresh_token: current.refresh_token,
+      })
+    ).status,
+  ).not.toBe(200);
+  expect((await decide(inFlight, true)).status).toBe(403);
+  expect((await mcp(otherUser.access_token)).status).toBe(200);
+  expect(
+    (
+      await mf.dispatchFetch(`${origin}/api/mcp-connections`, {
+        headers: { authorization: `Bearer ${otherUser.access_token}` },
+      })
+    ).status,
+  ).toBe(401);
+  // Legacy credentials still work and refresh without retroactive consent.
+  await db
+    .prepare(
+      "INSERT INTO oauthAccessToken (id,accessToken,refreshToken,accessTokenExpiresAt,refreshTokenExpiresAt,clientId,userId,scopes,createdAt,updatedAt) VALUES (?,?,?,?,?,?,?,?,?,?)",
+    )
+    .bind(
+      randomUUID(),
+      "legacy-oauth-fixture",
+      "legacy-refresh-fixture",
+      Date.now() + 60000,
+      Date.now() + 60000,
+      client.client_id,
+      users[0],
+      "openid offline_access",
+      Date.now(),
+      Date.now(),
+    )
+    .run();
+  expect((await mcp("legacy-oauth-fixture")).status).toBe(200);
+  const legacyRefreshed = await tokenRequest({
+    grant_type: "refresh_token",
+    refresh_token: "legacy-refresh-fixture",
+  });
+  expect(legacyRefreshed.status).toBe(200);
+  // SAFETY: The provider's successful refresh response is exercised as an MCP bearer below.
+  const legacyCurrent = (await legacyRefreshed.json()) as {
+    access_token: string;
+  };
+  expect((await mcp(legacyCurrent.access_token)).status).toBe(200);
+  expect((await mcp("legacy-oauth-fixture")).status).toBe(401);
+  expect((await revoke(cookies[0])).status).toBe(200);
+  expect((await mcp(legacyCurrent.access_token)).status).toBe(401);
+
+  // Revoke after the approval reads pending state but before its write. The
+  // provider must not restore consent after that pending state is deleted.
+  const staleConsent = await authorize();
+  await db
+    .prepare(`CREATE TRIGGER revoke_during_approval BEFORE UPDATE ON verification
+    WHEN OLD.identifier = '${staleConsent}' BEGIN
+      DELETE FROM oauthAccessToken WHERE userId = json_extract(OLD.value, '$.userId') AND clientId = json_extract(OLD.value, '$.clientId');
+      DELETE FROM oauthConsent WHERE userId = json_extract(OLD.value, '$.userId') AND clientId = json_extract(OLD.value, '$.clientId');
+      DELETE FROM verification WHERE identifier = OLD.identifier;
+    END`)
+    .run();
+  try {
+    expect((await decide(staleConsent, true)).status).toBe(403);
+    expect(
+      await db
+        .prepare(
+          "SELECT id FROM oauthConsent WHERE userId = ? AND clientId = ?",
+        )
+        .bind(users[0], client.client_id)
+        .all(),
+    ).toMatchObject({ results: [] });
+  } finally {
+    await db.exec("DROP TRIGGER revoke_during_approval");
+  }
+
+  // Deterministically model revocation after code consumption but before the
+  // candidate token is returned, rather than depending on request timing.
+  const finalConsent = await decide(await authorize(), true);
+  expect(finalConsent.status).toBe(200);
+  // SAFETY: The successful provider consent response returns the callback URL used in the exchange below.
+  const finalRedirect = new URL(
+    ((await finalConsent.json()) as { redirectURI: string }).redirectURI,
+  );
+  await db
+    .prepare(`CREATE TRIGGER revoke_during_exchange AFTER INSERT ON oauthAccessToken BEGIN
+      DELETE FROM oauthConsent WHERE userId = NEW.userId AND clientId = NEW.clientId;
+    END`)
+    .run();
+  try {
+    const revokedExchange = await exchange(
+      finalRedirect.searchParams.get("code")!,
+    );
+    expect(revokedExchange.status).toBe(401);
+    expect(await revokedExchange.json()).toMatchObject({
+      error: "invalid_grant",
+    });
+    expect(
+      await (
+        await mf.dispatchFetch(`${origin}/api/mcp-connections`, {
+          headers: { cookie: cookies[0] },
+        })
+      ).json(),
+    ).toEqual({ connections: [] });
+  } finally {
+    await db.exec("DROP TRIGGER revoke_during_exchange");
+  }
+  const otherConnections = () =>
+    mf.dispatchFetch(`${origin}/api/mcp-connections`, {
+      headers: { cookie: cookies[1] },
+    });
+  await db
+    .prepare(
+      "UPDATE oauthAccessToken SET accessTokenExpiresAt = ? WHERE accessToken = ?",
+    )
+    .bind("2000-01-01T00:00:00.000Z", otherUser.access_token)
+    .run();
+  expect(await (await otherConnections()).json()).toEqual({
+    connections: [{ clientId: client.client_id, name: "Local OAuth reviewer" }],
+  });
+  await db
+    .prepare(
+      "UPDATE oauthAccessToken SET refreshTokenExpiresAt = ? WHERE accessToken = ?",
+    )
+    .bind("2000-01-01T00:00:00.000Z", otherUser.access_token)
+    .run();
+  expect(await (await otherConnections()).json()).toEqual({ connections: [] });
+});
+
+test("API keys enforce MCP permissions, plan gates, capture scope, and live revocation", async () => {
+  const { userId, key: captureKey } = await account();
+  const reader = await fixture<Key>("key", { userId, permission: "read" });
+  const writer = await fixture<Key>("key", {
+    userId,
+    permission: "write",
+    expiry: "90d",
+  });
+  const db = await mf.getD1Database("DB");
+  const rpc = async (
+    key: string,
+    method: string,
+    params: { name?: string; arguments?: Record<string, string> } = {},
+    path = "/mcp",
+  ) => {
+    const response = await mf.dispatchFetch(`http://fixture${path}`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${key}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: "test", method, params }),
+    });
+    return {
+      status: response.status,
+      // SAFETY: The real MCP handler emits this envelope; each tested field is asserted below.
+      body: (await response.json()) as {
+        error?: { code: number };
+        result?: {
+          tools?: { name: string }[];
+          isError?: boolean;
+          content?: { text: string }[];
+        };
+      },
+    };
+  };
+  expect((await rpc(captureKey, "initialize")).status).toBe(401);
+  expect(
+    (
+      await rpc(reader.key, "tools/call", {
+        name: "get_outline",
+        arguments: {},
+      })
+    ).body.error?.code,
+  ).toBe(-32001);
+  await db
+    .prepare(
+      "INSERT INTO subscription (id,plan,referenceId,status) VALUES (?,'unlimited',?,'active')",
+    )
+    .bind(randomUUID(), userId)
+    .run();
+  const discovery = await rpc(reader.key, "tools/list", {}, "/api/mcp");
+  expect(discovery.body.result?.tools?.map((tool) => tool.name).sort()).toEqual(
+    ["export_opml", "get_outline", "get_pro_trial", "search_nodes"],
+  );
+  const captured = await api("/api/capture", captureKey, {
+    attemptId: randomUUID(),
+    date: "2026-01-02",
+    text: "Visible ||hidden-secret||",
+  });
+  expect(captured.response.status).toBe(200);
+  const nodeId = captured.body!.nodeId!;
+  const read = await rpc(reader.key, "tools/call", {
+    name: "get_outline",
+    arguments: {},
+  });
+  expect(read.body.result?.isError).not.toBe(true);
+  expect(JSON.stringify(read.body)).toContain("Visible");
+  expect(JSON.stringify(read.body)).not.toContain("hidden-secret");
+  const original = (await fixture<Inspection>("inspect", { userId })).snapshot
+    .nodes;
+  for (const name of [
+    "add_node",
+    "update_node",
+    "delete_node",
+    "add_to_today",
+    "mirror_node",
+    "mirror_to_today",
+    "add_subtree",
+    "move_nodes",
+    "import_opml",
+  ]) {
+    // Even explicit calls to tools hidden from discovery cannot reach a write.
+    expect(
+      (
+        await rpc(reader.key, "tools/call", {
+          name,
+          arguments: { nodeId, text: "forbidden", sourceApp: "test" },
+        })
+      ).body.result?.isError,
+      name,
+    ).toBe(true);
+  }
+  expect(
+    (
+      await api("/api/capture", reader.key, {
+        attemptId: randomUUID(),
+        date: "2026-01-02",
+        text: "forbidden",
+      })
+    ).response.status,
+  ).toBe(403);
+  expect(
+    (await fixture<Inspection>("inspect", { userId })).snapshot.nodes,
+  ).toEqual(original);
+  const write = await rpc(writer.key, "tools/call", {
+    name: "update_node",
+    arguments: { nodeId, text: "Allowed", sourceApp: "test" },
+  });
+  expect(write.body.result?.isError).not.toBe(true);
+  expect(
+    (await fixture<Inspection>("inspect", { userId })).snapshot.nodes.find(
+      (n) => n.id === nodeId,
+    )?.text,
+  ).toBe("Allowed");
+  expect(
+    (
+      await api("/api/capture", writer.key, {
+        attemptId: randomUUID(),
+        date: "2026-01-02",
+        text: "writer capture",
+      })
+    ).response.status,
+  ).toBe(200);
+  for (const path of ["/api/nodes", "/api/keys", "/api/capture-keys"])
+    expect((await api(path, writer.key)).response.status, path).toBe(401);
+  await fixture("manage", {
+    userId,
+    manageMethod: "DELETE",
+    manageBody: { id: reader.entry.id },
+  });
+  expect((await rpc(reader.key, "tools/list")).status).toBe(401);
+  await fixture("password", { userId, password: "changed" });
+  expect((await rpc(writer.key, "initialize")).status).toBe(401);
+  const expired = await fixture<Key>("key", {
+    userId,
+    permission: "write",
+    expiresAt: Date.now() - 1,
+  });
+  expect((await rpc(expired.key, "tools/list")).status).toBe(401);
+  const failure = await api("/api/capture", expired.key, {
+    attemptId: randomUUID(),
+    date: "2026-01-02",
+    text: "not saved",
+  });
+  expect(failure.response.status).toBe(401);
+  expect(failure.body?.message).toContain("Dotnot Settings");
+  expect(failure.body?.saved).not.toBe(true);
+});
+
+test("share target: launch hands text over without saving; Add to Today is session-only and keys stay separate", async () => {
+  const password = "disposable-share-password";
+  const userId = `share-${randomUUID()}`;
+  await fixture("seed", { userId, password: await hashPassword(password) });
+  const signin = await mf.dispatchFetch(
+    "http://fixture/api/auth/sign-in/email",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: "http://fixture" },
+      body: JSON.stringify({ email: `${userId}@capture.test`, password }),
+    },
+  );
+  expect(signin.status).toBe(200);
+  const cookie = signin.headers
+    .getSetCookie()
+    .map((value) => value.split(";")[0])
+    .join("; ");
+  const { key } = await fixture<Key>("key", { userId });
+
+  // The share sheet's POST: Android's link-in-text shape, with a space and +.
+  // Miniflare's fetch takes undici's body type; serialize through a Request.
+  const launch = async (
+    headers: Record<string, string>,
+    form = new FormData(),
+  ) => {
+    const encoded = new Request("http://fixture/share", {
+      method: "POST",
+      body: form,
+    });
+    return mf.dispatchFetch("http://fixture/share", {
+      method: "POST",
+      headers: {
+        cookie,
+        "content-type": encoded.headers.get("content-type")!,
+        ...headers,
+      },
+      body: Buffer.from(await encoded.arrayBuffer()),
+      redirect: "manual",
+    });
+  };
+  const shared = new FormData();
+  shared.set("title", "A+B page");
+  shared.set("text", "Read this https://example.com/a?b=1&c=2");
+  const launched = await launch({ "sec-fetch-site": "none" }, shared);
+  expect(launched.status).toBe(303);
+  const location = launched.headers.get("location")!;
+  expect(location.startsWith("/share#")).toBe(true);
+  const handed = new URLSearchParams(location.slice("/share#".length));
+  expect(handed.get("title")).toBe("A+B page");
+  expect(handed.get("text")).toBe("Read this https://example.com/a?b=1&c=2");
+  expect(handed.has("url")).toBe(false);
+
+  // Chrome 156+ attributes the launch to the app itself.
+  expect(
+    (
+      await launch({
+        "sec-fetch-site": "same-origin",
+        origin: "http://fixture",
+      })
+    ).headers.get("location"),
+  ).toBe("/share#");
+
+  // A form posted from another site, a sibling subdomain, or a client that
+  // sends no Fetch Metadata never reaches the page as shared text.
+  const refusals: Record<string, string>[] = [
+    { "sec-fetch-site": "cross-site", origin: "https://evil.test" },
+    { "sec-fetch-site": "same-site", origin: "https://e.fixture" },
+    { "sec-fetch-site": "same-origin", origin: "https://evil.test" },
+    {},
+  ];
+  for (const headers of refusals) {
+    const refused = await launch(headers, shared);
+    expect(refused.status, JSON.stringify(headers)).toBe(303);
+    expect(refused.headers.get("location")).toBe("/share#error=rejected");
+  }
+  const withFile = new FormData();
+  withFile.set("text", new File(["x"], "x.txt", { type: "text/plain" }));
+  expect(
+    (await launch({ "sec-fetch-site": "none" }, withFile)).headers.get(
+      "location",
+    ),
+  ).toBe("/share#error=invalid");
+  // The launch itself never wrote.
+  expect(
+    (await fixture<Inspection>("inspect", { userId })).snapshot.nodes,
+  ).toEqual([]);
+
+  const add = (
+    headers: Record<string, string>,
+    body: typeof CaptureBody.Type,
+  ) =>
+    mf.dispatchFetch("http://fixture/api/share", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...headers },
+      body: JSON.stringify(body),
+    });
+  const payload = {
+    attemptId: randomUUID(),
+    date: "2026-11-13",
+    text: "- [ ] shared task\n  - nested note",
+  };
+  // A key is not a session, and a session is not a key.
+  expect(
+    (
+      await add(
+        { authorization: `Bearer ${key}`, origin: "http://fixture" },
+        payload,
+      )
+    ).status,
+  ).toBe(401);
+  expect((await api("/api/capture", "", payload)).response.status).toBe(401);
+  const cookieOnCapture = await mf.dispatchFetch("http://fixture/api/capture", {
+    method: "POST",
+    headers: {
+      cookie,
+      origin: "http://fixture",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  expect(cookieOnCapture.status).toBe(401);
+  // The session still needs this server's Origin.
+  const foreign = await add({ cookie, origin: "https://evil.test" }, payload);
+  expect(foreign.status).toBe(403);
+  expect(
+    (await fixture<Inspection>("inspect", { userId })).snapshot.nodes,
+  ).toEqual([]);
+
+  const saved = await add({ cookie, origin: "http://fixture" }, payload);
+  expect(saved.status).toBe(200);
+  // SAFETY: a 200 from /api/share is the capture receipt (worker/capture.ts).
+  const receipt = (await saved.json()) as CaptureReceipt & {
+    replayed: boolean;
+  };
+  expect(receipt).toMatchObject({
+    saved: true,
+    date: "2026-11-13",
+    replayed: false,
+  });
+  const replay = await add({ cookie, origin: "http://fixture" }, payload);
+  expect(await replay.json()).toEqual({ ...receipt, replayed: true });
+  const { snapshot } = await fixture<Inspection>("inspect", { userId });
+  const task = snapshot.nodes.find((node) => node.id === receipt.nodeId)!;
+  expect(task).toMatchObject({
+    text: "shared task",
+    isTask: true,
+    parentId: receipt.dailyNoteId,
+  });
+  expect(
+    snapshot.nodes.filter((node) => node.parentId === task.id),
+  ).toMatchObject([{ text: "nested note" }]);
+  expect(
+    snapshot.nodes.filter((node) => node.parentId === receipt.dailyNoteId),
+  ).toHaveLength(1);
+});

@@ -1,0 +1,92 @@
+import type { CSSProperties, Ref } from "react";
+
+import { cn } from "@/lib/utils";
+
+import type { MenuEntry } from "../plugins/types";
+
+import { useMenuActiveItem } from "./use-menu-active-item";
+
+export function MenuList({
+  entries,
+  activeIndex,
+  emptyLabel,
+  onHover,
+  onSelect,
+  style,
+  ref,
+  inDock = false,
+  label = "Suggestions",
+  className,
+}: {
+  entries: readonly Pick<MenuEntry, "key" | "render">[];
+  activeIndex: number;
+  emptyLabel?: string;
+  onHover: (index: number) => void;
+  onSelect: (index: number) => void;
+  /** Position the listbox. The caller owns it (clamped-to-viewport fixed coords
+   *  via `useClampedMenuPosition`). */
+  style?: CSSProperties;
+  ref?: Ref<HTMLDivElement>;
+  inDock?: boolean;
+  label?: string;
+  className?: string;
+}) {
+  const { itemRef, onItemPointerMove } = useMenuActiveItem({
+    activeIndex,
+    itemCount: entries.length,
+    onHover,
+  });
+
+  return (
+    <div
+      ref={ref}
+      role="listbox"
+      aria-label={label}
+      className={cn(
+        inDock
+          ? "w-full"
+          : "z-50 w-64 overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-md",
+        className,
+      )}
+      style={style}
+    >
+      {/* Scroll + fade live on an inner div with NO background, so the mask
+          dissolves content into the card's bg-popover (matching the Cmd+K
+          list), not into the darker editor background behind the card. */}
+      <div
+        className={cn("p-1", !inDock && "max-h-72 scroll-fade overflow-y-auto")}
+      >
+        {entries.length === 0 ? (
+          <div className="px-2 py-1.5 text-sm text-muted-foreground">
+            {emptyLabel ?? "No results"}
+          </div>
+        ) : (
+          entries.map((entry, i) => (
+            <button
+              key={entry.key}
+              ref={itemRef(i)}
+              type="button"
+              role="option"
+              aria-selected={i === activeIndex}
+              className={cn(
+                // Clear the scroll-fade mask when scrolling the active option.
+                "flex w-full scroll-my-10 items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm",
+                inDock && "h-11 py-2",
+                i === activeIndex && "bg-accent text-accent-foreground",
+              )}
+              // mousedown (not click) so the contentEditable keeps focus.
+              onMouseDown={(e) => {
+                e.preventDefault();
+                if (!inDock) onSelect(i);
+              }}
+              onClick={inDock ? () => onSelect(i) : undefined}
+              onPointerMove={onItemPointerMove(i)}
+            >
+              {entry.render(i === activeIndex)}
+            </button>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}

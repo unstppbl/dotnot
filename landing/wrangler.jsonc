@@ -1,0 +1,19 @@
+{
+  // Static marketing site for the apex domain. Assets-only Worker (no `main`):
+  // Cloudflare serves dist/client directly. The app itself lives in a separate
+  // Worker on the configured application origin (see ../wrangler.jsonc).
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "dotnot-landing",
+  "compatibility_date": "2026-06-23",
+  // Configure your own domain when ready to publish.
+  "workers_dev": true,
+  "assets": {
+    // TanStack Start prerendered build output; `/` is baked to index.html.
+    "directory": "./dist/client",
+    // Any unmatched path serves index.html so the client router takes over.
+    "not_found_handling": "single-page-application",
+  },
+  "observability": {
+    "enabled": true,
+  },
+}

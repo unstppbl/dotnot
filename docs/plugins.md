@@ -1,0 +1,188 @@
+# Plugin architecture
+
+The editor is a clean core extended by **plugins**: modules compiled into the bundle via an internal registry, not runtime-loaded, one per `src/plugins/<name>/`. `code`, `links`, `tags`, `todos`, `daily`, and `route-bible` are themselves plugins, so the core carries no feature-specific branches.
+
+Read [ADR 0001](./adr/0001-plugin-architecture.md) before adding a seam, and [ADR 0031](./adr/0031-two-lane-plugin-trust.md) before giving a plugin new privileges. Widget-mode tokens: [ADR 0006](./adr/0006-react-token-widgets.md).
+
+- **`types.ts`** — the typed contract (`definePlugin`, `El`/`WidgetEl`, `TokenSpec`, `InteractionSpec`, `CommandSpec`, `KeymapSpec`, `SlotSpec`, `HeaderSlotSpec`, `SubheaderSlotSpec`, `ExternalDropTargetSpec`, `NodeProtection`, `ViewTransform`, `MenuSpec`, `InputSpec`, the Seam-J `Search*` types, `PluginContext`).
+- **`index.ts`** — the one explicit ordered array `plugins = [todos, provenance, code, links, embeds, nodeLinks, routeBible, tags, emphasis, highlight, spoiler, quote, daily, scribble, focus]`. Add a plugin = add a folder + one line. Array order is the precedence tiebreak and dispatch order. `editorFeaturePlugins` maps the three reviewed optional plugins to their account preference keys.
+- **`registry.ts`** — derives the token regex, dispatch, transforms, menus, commands, keymaps, slots, protection, search providers, and input chain from that array. Optional Bible, Daily, and Embeds editor seams refresh when account preferences change; widget registration, protection, and preloads remain unconditional. React consumers read dynamic slots and commands through `usePluginChrome`. The core consumes these and stays generic.
+
+Seams wired today (each row: the contract, who owns it):
+
+| Seam                        | What it is                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Owners                                                                                                                                  |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| **A** inline token          | regex fragment + `render → El \| WidgetEl`, composed into one `gu` regex; core owns escaping. Folding token emits a `data-src` atom (`contenteditable="false"`); React mode mounts a `<dotflowy-widget>` TSX atom. Precedence: links 0 < node-links 5 < daily date 6 < code 10 < route-bible 15 < tags 20 < emphasis 30-34 < highlight 35 < spoiler 40 < quote 45.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | code, links, node-links, daily (date token), tags, route-bible, emphasis, highlight, spoiler, quote                                     |
+| **B** delegated interaction | one set of content-container handlers, dispatched by `target.closest(selector)`; core has zero feature knowledge.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | links, node-links, daily (date chip), tags, route-bible, highlight (right-click recolor)                                                |
+| **C** `/` command           | `CommandSpec`; the `/` list is `[...commandSpecs, ...CORE_COMMANDS]` (`src/data/core-commands.ts`). `/move`, `/mirror`, `/paragraph`, `/delete` stay core (`/delete` delegates to the `onDeleteNode` funnel).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | todos (`/todo`,`/bullet`), daily ("Send to Today"), emphasis (`/bold` etc.), highlight (`/highlight`)                                   |
+| **D** keymap                | `{hotkey, run}`; reserved-key denylist guarded at load.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | todos (`Mod+Enter`/`Mod+D`), emphasis (`Mod+B`/`Mod+I`/`Mod+U`/`Mod+Shift+X`), highlight (`Mod+Shift+H`)                                |
+| **E** side-collection       | plugin-owned data, no `Node` field (see Tag colors, below).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | tags                                                                                                                                    |
+| **F** node slot             | `{position:"row:before-text" \| "title:before-text" \| "row:after-text" \| "title:after-text", render(node,getCtx)}`, real JSX in rows and zoomed titles. `before-text` leads the node; `after-text` is the **budgeted trailing zone** (`NodeDecorations`, ADR 0031), clipped to `--node-deco-budget` with an overflow panel. `slotsAt(position)` returns the precomputed-stable array.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | todos (checkbox), daily (date badge), focus (remaining-time pie)                                                                        |
+| **F** header slot           | `{id, render(getCtx)}`, real JSX, no node — persistent actions in the header's right cluster.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | daily ("Today")                                                                                                                         |
+| **F** subheader slot        | `{id, placement?, render(getCtx)}`, contextual chrome below the header. `placement: "full-width"` renders above the shared view-specific row (ADR 0002/0074). The whole band collapses when empty and sticks with the header.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | focus (full-width band), daily (week calendar), core filter bar                                                                         |
+| **G** view transform        | per-node `hidesNode` predicate, composed into the one `isHidden`. Whole-tree DQL filtering belongs to the core (`buildQueryFilter`, ADR 0047), with feature predicates supplied through Seam K.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | todos (hide-completed)                                                                                                                  |
+| **H** caret menu            | `MenuSpec` (`trigger` + `entries`), driven by the generic `useMenus` engine.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | tags (`#`), node-links (`[[`)                                                                                                           |
+| **I** input                 | `input.onPaste` (replacement string) + `input.autoformat` (rewrite just-typed text) + `input.afterPaste` (post-insert side effect, may write back via `ctx.mutations`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | links (paste + title unfurl), todos (`[]`)                                                                                              |
+| **J** search providers      | `searchAliases`/`searchActions`/`searchAnnotation`; ctx is the minimal `{index, goTo}`, not a `PluginContext`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | daily                                                                                                                                   |
+| **K** filter operator       | `filterOperators`: `{key, values?, bare?, swatch?, description, predicate(node,index,value)}` on `definePlugin` — the `key:value` terms a plugin owns in the `?q=` grammar (ADR 0047 §4). Core parses STRUCTURE (spaces=AND, `-`=NOT, uppercase `OR`, `"quotes"`, `key:value`, `#tag` in `src/data/filter-query.ts`); each predicate supplies MEANING. Folded into one `(key,value)→op` map at load (`buildFilterOperatorMap` THROWS on a duplicate (key,value) claim — the keymap guard's stricter twin), and the SAME list drives the autocomplete cheat sheet (`collectOperatorKeyInfos`). A KEY can have many owners (the guard is per-pair): core, todos, and provenance all extend `is`. Core registers the node-kind operators (`is:todo\|bullet\|paragraph\|mirror`, `src/data/core-filter-operators.ts`), composed beside the plugin ones in `registry.ts`.                                                                                                                                                                                            | core (kinds), todos (`is:complete`), links (`has:link`), highlight (`highlight:` + colors), provenance (`is:agent`), quote (`is:quote`) |
+| **L** capture destination   | `captureDestination(): CaptureDestination \| null` — quick-add's default target (ADR 0049). **LAZY:** `label` is known synchronously (the `Today ▾` chip the instant the overlay opens), but `resolve()` get-or-creates the parent node **SEED-FREE** (like Send to Today, ADR 0041) only at born-on-first-keystroke — so an abandoned open mints nothing. First non-null wins; no provider → top level (`resolve` yields null). Core (quick-add) never imports daily (ADR 0001/0049).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | daily (Today)                                                                                                                           |
+| **M** external drop target  | `ExternalDropTargetSpec` exposes a reviewed Lane-A plugin control to the core-owned bullet drag. Core hit-tests the pointer center, gives an external target precedence over outline-gap projection, stamps `data-external-drop-active`, and passes the ordered structural roots to the plugin at drop time. The plugin owns styling and commits async work through `ctx.run`; there is no global-event bridge.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | daily (the seven visible week-calendar days)                                                                                            |
+| **N** view stream           | `viewStream(rootId): ViewStream \| null` + `viewStreamChanged(cb)` (ADR 0070). The plugin names the sections around a zoom root (keys, emptiness, placeholder titles, folds, create-on-first-keystroke); core owns the one flat list, scroll, `?day=` URL sync, and the caret walk across sections. Commands target the focused section via `getViewRootId()`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | daily (Day stream)                                                                                                                      |
+| —                           | **overlay host** `ctx.openOverlay(node\|null)` (self-positioning popover) + **Tier-3 panel host** `ctx.openPanel(node\|null)` (a `Sheet` slide-in with backdrop + dismiss, mounted in `OutlineEditor` — the contained home for rich UI, the node-decoration overflow target, and the only surface a future Lane-B MCP App may render into — ADR 0031); **protected nodes** `protects(id) → boolean \| NodeProtection` — the plugin only _declares which_ nodes; the **core enforces all four rules** (no delete / blank / to-do / complete) in `components/protection.tsx` (`guardProtected` on the command funnels, `signalRejection` on the blur heal) with a shake (`rejectRow`) + toast. A bare `true` is enough (core supplies default copy and a shield); the descriptor is **all overrides** (`reason`, `blankReason`/`taskReason`/`completeReason`, `canonicalText`, optional plugin-owned `indicator`). Reactive `<ProtectionIndicator>` via `useIsProtected` tracks async protection like the daily index. [ADR 0015](./adr/0015-protected-nodes.md). | tags (picker), daily (container)                                                                                                        |
+
+Feature → seams: **code** A · **links** A+B+C+D+I+K · **node-links** A(widget)+B+H · **route-bible** A(widget)+B · **tags** A+B+E+H (plus a `#tag` term into the CORE `?q=` filter on chip click) · **provenance** F+K · **emphasis** A(folding)+C+D · **highlight** A(folding)+B+C+D+K · **spoiler** A(folding)+C+D · **quote** A(folding)+C+K · **todos** C+D+F(row+title)+G+I+K · **daily** A(widget)+B+C+F(header)+F(subheader)+F(row+title)+J+L+M+N+protected. The `?q=` filter grammar itself is CORE (Seam K operators + `buildQueryFilter`), not a plugin. Seam **L** feeds the CORE quick-add surface (ADR 0049), not a plugin render path.
+
+The links keymap uses `Mod+K` only for a formattable text selection in a focused
+node editor. Otherwise, the command center keeps the shortcut. Quick-add hosts
+the create-link overlay inside its dialog's focus trap and restores its draft
+DOM when the overlay closes. See [ADR 0034](./adr/0034-cmd-k-command-center.md).
+
+**Global actions and editor font (ADR 0071).** `globalActions()` returns node-less
+Cmd+K commands; IDs are namespaced by plugin. `menuLabel` projects an action into
+the View menu; adding `checked` makes it a toggle. `available(rootId)` gates a
+page action in both surfaces, and `run(rootId)` receives the route-owned page
+root, never the Day stream's caret section. These actions remain available when optional
+editor seams are off, so Bible, Daily, and Embeds can be re-enabled. Daily also
+exposes its existing calendar preferences. External-embed permission opens
+Settings with its existing disclosure rather than granting consent directly.
+`editorFont()` supplies only a font family (first non-null wins); core applies
+it to `.node-text` and inline descendants in all three writing paths, plus
+the Day stream's empty-section entry line, never navigation or embed bodies.
+`chromeChanged` publishes changes to browser-local
+mode state without rebuilding tokens. Scribble uses these seams plus an
+existing header slot for its active-only off-switch. No arbitrary CSS seam.
+See [ADR 0071](./adr/0071-plugin-global-actions-and-editor-font.md).
+
+**Mobile destinations (ADR 0076).** `HeaderSlotSpec.mobileTab` projects a header
+destination into the dock below 768px. The plugin supplies `label`, `icon`,
+`href`, and `isActive(rootId, sectionKey)`; core renders SPA links and owns the
+glass/opaque presentation. The predicate reads identity without creating nodes.
+Optional `onSelect(getCtx, navigate)` handles same-tab activation; modified clicks
+still follow the href. Daily shares its header action for in-stream Today scrolling
+and uses `/today` for new tabs; disabling Daily removes the tab.
+Header slots without a mobile tab, such as Scribble's off-switch, stay in the
+toolbar. See [ADR 0076](./adr/0076-mobile-navigation-dock.md).
+
+**Focus sessions (ADR 0074).** `focus` uses C, F (full-width subheader and
+row/title after-text), and global actions. Its picker and PiP card use the kit.
+The session is account-keyed browser-local state shared across tabs, with absolute
+deadlines and focus time excluding pauses and breaks. Pomodoro moves to a break
+at the focus deadline, then waits for a click before the next round. Done ends
+the whole session. Reflection appends one ordinary child under the true source
+through an atomic structural write. `focus:settings` lives in `account-prefs`,
+beside its `editor-feature:focus` switch; turning it off ends a running session.
+Document PiP opens only by a click in desktop
+Chrome and is unavailable in Safari and on phones.
+
+**Still core-wired (deliberately, awaiting future seams):** fade-inheritance (`faded`/`ancestorCompleted`) and Backspace kind demotion still read `completed`/`isTask`/`kind` in the row and its keymap; the bullet-vs-paragraph glyph and paragraph-to-bullet `- ` autoformat read `kind` there too (core's own field, ADR 0045), and the quote bar reads `isQuoteText` on the text (ADR 0079), as do the quote's Enter and Backspace rules; the `/` palette still runs `useSlashMenu` (only its command _list_ is registry-driven).
+
+Numbered nodes are core-owned too: `/numbered`, row-only `1. ` conversion,
+Enter/Backspace, and the position-local number handle follow
+[ADR 0080](./adr/0080-numbered-nodes.md). Numbered Kind takes glyph precedence
+over a quote bar; quote marker editing still takes keyboard precedence.
+
+**Constraints when touching this:** keep token `render` output byte-stable (the `decorate` cache compares strings) and allocation-light (runs per keystroke); never hand the core raw HTML (return `El`/`WidgetEl`); don't reintroduce N separate token scans. **Shared token helpers live in `src/plugins/token-kit.ts`** (`isRevealed` fold/reveal predicate, verbatim-match-or-drop write-back, `spliceToken` re-export) — use them, don't re-copy the predicate; `spliceToken` itself lives in the dependency-free `token-splice.ts` so worker-reachable data modules can import it without dragging DOM types into the Workers tsconfig. **Plugin UI comes from `src/plugins/kit.ts`** — the curated shadcn surface a Lane-A plugin may use (ADR 0031); a plugin importing `@/components/ui/*` directly is an oxlint error (`no-restricted-imports` override on `src/plugins/**`). Add a component to the kit when a plugin needs it; there is no plugin `styles` seam (style via Tailwind utilities on your `El`/JSX). **Paint with theme tokens, never literal colors** (`text-muted-foreground`, `bg-(--tag-blue)`, `text-primary-ink`, `bg-(--spoiler)`): a color theme recolors the tokens and blends the accent palette toward its background, and a literal `oklch()` or `#hex` breaks on every theme but one ([ADR 0082](./adr/0082-color-themes.md)).
+
+Add a new side-collection to `KV_COLLECTIONS` in `worker/index.ts`. The e2e kv mock accepts any name.
+
+## Icons
+
+App UI and plugin icons come from `src/lib/icons.tsx`: free Hugeicons Stroke
+Rounded artwork, rendered at its default 1.5 stroke. The shared module binds icon
+data to components once, so command and plugin contracts still accept ordinary
+components. Use those exports rather than new per-plugin wrappers or stroke
+adjustments. Sizes and hitboxes remain owned by their existing surfaces.
+
+`components.json` selects Hugeicons for new shadcn components. Route generated
+icons through the shared module and remove any generated `strokeWidth={2}`.
+The two text-free CSS masks in `src/styles.css` use the matching Hugeicons pencil
+and highlighter paths at 1.5; masks keep token markup and caret offsets unchanged.
+Brand marks and the live Focus progress pie are not UI-library icons. The
+separate landing package is outside this app convention. License notices live
+in [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).
+
+## Optional editor features
+
+Settings → Plugins controls Bible references, Daily notes, Embeds, and Focus
+sessions, all on by default. Each row's options open in a one-at-a-time
+accordion; `/settings#daily`, `#embeds`, and `#focus` open one directly. Plugin
+options use `SettingsOptionRow` from the kit so they share one layout.
+`src/data/editor-features.ts` stores `editor-feature:bible`,
+`editor-feature:daily`, `editor-feature:embeds`, and `editor-feature:focus` in
+the per-user `account-prefs` namespace. Local
+changes apply optimistically, failed saves roll back, and other tabs and devices
+refresh on focus. Optional controls wait for the initial preference read.
+
+Turning a feature off changes tokens, interactions, commands, chrome, search
+providers, and the default capture destination, not stored text or mappings.
+Daily scaffold protection and preloads stay active. The node-link picker also
+omits Daily date suggestions. All three editor render paths redecorate from DOM
+source text while preserving the caret; composing text waits until IME ends.
+CLI and MCP daily operations remain available. See
+[ADR 0064](./adr/0064-account-wide-editor-feature-preferences.md).
+
+The Day stream is temporarily unavailable, including for accounts with a saved
+opt-in. Its disabled setting explains that we're working to bring it back.
+Daily notes, Today, and single-day calendar navigation remain available; no
+notes or saved preferences are deleted. Empty days options are disabled with
+the stream. See [ADR 0070's suspension](./adr/0070-day-stream.md#november-8-amendment-temporary-suspension).
+
+Embeds also requires the independent `external-embeds` account permission,
+off by default. Approval must persist before provider requests start. The reviewed
+`row:body` and `title:body` positions render below editable text through
+`NodeBody`; these block slots are outside the trailing decoration budget.
+Quick-add does not render them. Core preserves the source link with the plugin
+off. Provider HTML never enters the authenticated app document. See
+[ADR 0016](./adr/0016-link-title-unfurl.md) and
+[ADR 0031](./adr/0031-two-lane-plugin-trust.md).
+
+## Editor render paths
+
+**A node renders in three places**, with three keymaps: `OutlineRow` /
+`useBulletKeymap`, `ZoomedTitle`'s inline `useHotkeys`, and `MiniNodeEditor`.
+Delegated pointers, `/`, and caret menus already reach all three. Keymaps and
+slots do not. The `refs` registry maps a node id to its contentEditable span;
+the zoomed title registers under `rootId`.
+
+`el.textContent` is not the source. Folding tokens render `data-src` atoms.
+Read with `readSource(el)`. Caret offsets are SOURCE offsets through
+`getCaretOffset` / `setCaretOffset` ([ADR 0005](./adr/0005-rich-links-source-offset-caret.md)).
+Stored text writes to the DOM only when it differs.
+
+`editor-decoration.ts` shares three responsibilities without owning the editor
+DOM, mutations, history, or keymaps:
+
+- `useInputDecoration` pauses input decoration during composition, then reads
+  source, writes it through the surface's callback, and decorates on composition
+  end. Input writes and menu updates still happen during composition. Only rows
+  run autoformat, only on text insertion; the input includes the source caret
+  offset so plugins can require a just-completed marker. Deletion and edits
+  elsewhere must leave literal markers alone. Task markers strip no following
+  source whitespace. All source/range math stays in `inline-code.ts`; decoration
+  preserves both selection endpoints and forward/backward direction.
+- `useCaretReveal` replaces the previous watcher on focus and disposes it on
+  blur or unmount, including disconnects without blur. Deferred focus reveal
+  still reads live source at frame time. Rows and titles check stored text for
+  folding tokens; Quick-add checks its draft DOM.
+- `useStoredTextDecoration` reconciles rows and titles after every render,
+  skipping composition, already-painted text, and focused echoes unless history
+  is restoring. The title retains its existing focused-prefix hold; rows accept
+  local shrinks. Quick-add does not use store-to-DOM reconciliation: its draft
+  adoption, clearing, restoration, and history scope remain capture-owned.
+
+Row mount-time seeding still precedes virtualized pending-focus claims. Mirror
+text writes use the content id; focus uses the render path. Enter/type/Enter
+stays synchronous, and persistence ordering and rollback remain data-layer
+responsibilities. No host reuse or DOM attribute changes belong in these hooks.
+
+Regression coverage: `emphasis.spec.ts` and `enter-split.spec.ts` cover source
+ranges and immediate typing; `quick-add.spec.ts` covers listener lifetime and
+capture adoption; `undo-redo.spec.ts` covers IME, rollback, and history isolation;
+`mirror-editing.spec.ts`, `multi-frame-echo.spec.ts`, and
+`virtualized-windowing.spec.ts` cover mirrors, echoes, and offscreen focus.
+
+`OutlineEditor` and `SwitcherDialog` carry `"use no memo"`. Keep the hand-tuned
+`memo` / `useMemo` on the contentEditable hot path.
+
+The visible-neighbor walk must mirror render visibility. Assert nesting through
+`data-parent-id` and `data-depth` — the windowed list is flat.

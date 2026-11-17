@@ -1,0 +1,972 @@
+# dotflowy
+
+## 3.10.7
+
+### Patch Changes
+
+- 0254a0f: Fix typed characters landing out of order when a keystroke arrives while the page is busy.
+
+## 3.10.6
+
+### Patch Changes
+
+- c289a0d: Allow a single link in a paragraph or numbered node to convert to an Embed through the link editor.
+
+## 3.10.5
+
+### Patch Changes
+
+- e1c2261: Update mobile glass components with upstream rendering and resizing improvements while preserving keyboard-aware sheets and independent content scrolling.
+
+## 3.10.4
+
+### Patch Changes
+
+- 9ee7d0f: Ask for browser confirmation before revoking an authorized app or API key in Settings.
+
+## 3.10.3
+
+### Patch Changes
+
+- db85c04: The theme picker in Settings is now one compact row. Choose a theme from its menu, or from a sheet on phones.
+
+## 3.10.2
+
+### Patch Changes
+
+- 6618c71: Separate Connections settings into collapsible Set up and Access groups, show authorized apps and API keys together, and smooth settings panels when opening and closing.
+
+## 3.10.1
+
+### Patch Changes
+
+- 20f925f: On iPhone, full-height sheets such as Find now reach the keyboard. Before, the outline showed through between the sheet and the keyboard.
+
+## 3.10.0
+
+### Minor Changes
+
+- a9e42d5: Find is now the one search box. Every search shows matches in this node and everywhere else, plus commands, with a sidebar on desktop and tabs on phones to narrow where you look. Press Cmd+F to search this node, then Shift+Enter or Show in outline to filter the view. A pill shows the active filter until you clear it. Saved filters, with rename and delete, now live in Find.
+
+## 3.9.0
+
+### Minor Changes
+
+- 52ba737: Pro and Founding members can make a Custom theme: drag a dot to pick a color, add an optional second color, and choose how much the page takes it. Dotnot derives the rest in light and dark Mode and keeps it readable. Free members can preview it in Settings.
+
+## 3.8.1
+
+### Patch Changes
+
+- 782c4d6: Require explicit approval for new MCP connections, add per-app access revocation in Settings, and correct endpoint discovery and tool permission hints.
+
+## 3.8.0
+
+### Minor Changes
+
+- 99eedd8: Opt into a 14-day Pro trial through Stripe Checkout with no card required. Settings shows trial timing and billing options, and MCP can provide the setup link without starting a trial. Trials without a payment method return to Free without deleting outline data.
+
+## 3.7.0
+
+### Minor Changes
+
+- ffd61ef: Choose whether AI-created nodes show their source app's logo or a quiet sparkle in Settings → Appearance. App icons stay on by default, and the choice follows your account across devices.
+
+## 3.6.3
+
+### Patch Changes
+
+- 90368bc: Improve the Active plan badge and on/off switch contrast in every color theme and mode.
+
+## 3.6.2
+
+### Patch Changes
+
+- b60c442: Consolidate app icons on the free Hugeicons library at its default line weight, including menus, editor controls, settings, and inline edit affordances. Use a stopwatch for timed Focus session actions to distinguish them from Spotlight mode. Preserve brand logos and the live Focus progress pie.
+
+## 3.6.1
+
+### Patch Changes
+
+- e5d3781: Use readable theme ink for hovered node handles and breadcrumb links instead of the bright button fill color.
+
+## 3.6.0
+
+### Minor Changes
+
+- 49d9027: Preview paid themes before subscribing, see which connections are included with Pro and Founding, and receive a personal thank-you after payment. Report bugs privately without GitHub, with member ideas and questions sent to a first-party inbox. Feedback sends an automatic receipt and private owner notification. The private admin inbox supports completion, reopening, internal comments, reporter email addresses, and reviewed replies from Dotnot Support with private send history.
+
+## 3.5.1
+
+### Patch Changes
+
+- 8a34ab2: Read What's new on narrow screens without sideways scrolling. Release notes use the full width, wrap long code terms, and keep the footer visible. Changes that need a step from you appear as a neutral update note rather than a warning.
+
+## 3.5.0
+
+### Minor Changes
+
+- 73e0777: Share text or a link to Dotnot from other apps on Android, ChromeOS, and Windows (when installed with Edge). Install the app, choose Dotnot in the share sheet, check the preview, and tap Add to Today. Lists and tasks keep their structure, like Quick-add. iPhone and iPad keep using the Apple Shortcut.
+
+## 3.4.0
+
+### Minor Changes
+
+- 225d29a: Manage expiring API keys in Connections with capture-only, read-only, or read/write access. Use personal keys with the CLI or supported MCP clients alongside OAuth. New keys default to 30 days, with a 90-day maximum; existing long-lived capture keys receive a 90-day grace period without broader permissions. Rotate keys without changing their permissions, and receive an email reminder within seven days of expiration. Selected permissions and lifetimes are clearer. Apple Shortcut setup is no longer experimental, its icon is fixed for fresh imports, and expired-key errors point to Dotnot Settings.
+
+## 3.3.1
+
+### Patch Changes
+
+- 7c4c7a1: Keep the node you zoomed out from in view during the zoom animation, including in long outlines.
+
+## 3.3.0
+
+### Minor Changes
+
+- 15d70ce: Find nodes everywhere from the magnifier or Cmd+K, with DQL queries and nearby matches first. Use the funnel or Cmd+F to filter the current outline in place. Both surfaces offer include/exclude shortcuts, including completed nodes and nodes with children. Empty filters suggest useful ways to recover matches, and Find results let you return to the same search.
+
+## 3.2.0
+
+### Minor Changes
+
+- 4dcf26d: Pick a color theme in Settings → Appearance or from the command palette: Dotnot, Claude-ish, Catppuccin, Twitter-ish, Modern Minimal, or Leaf. Your theme follows you across devices, and light and dark mode work with every theme. Tag, highlight, and link colors now blend with the theme's background, quote bars and empty checkboxes are easier to see, and the focus band now drains like the pop-out window.
+
+## 3.1.1
+
+### Patch Changes
+
+- 5ce70c0: Copy as Markdown now uses linked nodes' current text instead of raw node IDs, preserving Markdown formatting and URLs.
+
+## 3.1.0
+
+### Minor Changes
+
+- b08c5a1: Focus sessions can now play a focus sound while you work: a clock tick, rain, or brown noise. Pick one when you start a session, then play, pause, switch sounds, or change the volume from the focus bar, the pop-out window, or the command palette. The sound pauses with your session, rests during breaks, and stops when you finish.
+
+## 3.0.4
+
+### Patch Changes
+
+- 8717634: The focus session picker now shows the selected length clearly, with larger choices that are easier to tell apart. Between Pomodoro rounds, the band reads "Next" and Start round is the main button, and long task names or links no longer push the picker's buttons off screen.
+
+## 3.0.3
+
+### Patch Changes
+
+- 3478b73: Stop drag auto-scroll outside the outline so nodes can be dropped onto calendar days without the outline continuing to scroll.
+
+## 3.0.2
+
+### Patch Changes
+
+- 58cfeff: Focus Quick-add inside the opening tap when account preferences are ready, so mobile Safari can raise the keyboard without a second tap.
+
+## 3.0.1
+
+### Patch Changes
+
+- 52c2cde: Fix the extra second-line indent on agent-created nodes while preserving wrapping underneath checkboxes and source marks.
+
+## 3.0.0
+
+### Major Changes
+
+- 41b3a5d: Nodes an agent creates now show the logo of the app that made them, such as
+  Claude, ChatGPT, Cursor, Gemini, Grok, or Amp, instead of one generic sparkle.
+  Every MCP tool that creates nodes now requires a `sourceApp` argument naming
+  that app. Update the CLI to keep creating nodes from the terminal.
+
+## 2.0.1
+
+### Patch Changes
+
+- d7def1d: The focus session's picture-in-picture window now leads with your task: its title is the largest text in the window and grows with the window, the time sits in a small pill, and progress fades across the background.
+
+## 2.0.0
+
+### Major Changes
+
+- a2c5cc2: Add numbered lists with automatic sibling numbering, `1. ` typing conversion,
+  and number handles that zoom and drag like bullets. Markdown, OPML, and agents
+  preserve numbered nodes. Older tabs can read numbered items as bullets and keep
+  editing text; reload before moving, deleting, converting, or undoing those items.
+  Update the CLI to expose numbered Kind values in search results.
+
+## 1.35.0
+
+### Minor Changes
+
+- 3722a73: Start a node with `> ` to make it a quote. A bar replaces the dot and still zooms in. Enter continues the quote, and Backspace right after `> ` turns the row back into a bullet. Pasted Markdown quotes stay quotes, and `is:quote` finds them.
+
+## 1.34.0
+
+### Minor Changes
+
+- 622e3a8: Type `- ` at the start of a paragraph to turn it into a bullet. Backspace removes task and bullet markers one character at a time, revealing the remaining prefix as editable text and keeping your text and children intact.
+
+## 1.33.10
+
+### Patch Changes
+
+- 60bf6f7: The focus session's picture-in-picture window now uses the app's primary color, matching the focus bar, so it stands out from the desktop and other windows in light and dark mode.
+
+## 1.33.9
+
+### Patch Changes
+
+- 71f9674: Interpret Markdown on external capture intake so task checkboxes, lists, and nested notes become real nodes without updating installed Apple Shortcuts.
+
+## 1.33.8
+
+### Patch Changes
+
+- f7249dc: Share outline contracts and command policy across editor surfaces. Daily claims now fail without inventing an identity, relocated daily notes stay in place, and multi-selection kind changes skip locked content.
+
+  Popover keyboard dismissal no longer waits for the opening-pointer delay.
+
+## 1.33.7
+
+### Patch Changes
+
+- 0864634: The mobile node actions bar now uses Liquid Glass to match the header and navigation, with an opaque accessibility fallback. Editing and formatting actions stay available while navigation fades during writing.
+
+## 1.33.6
+
+### Patch Changes
+
+- 636d65a: Truncate desktop breadcrumbs with ellipsis instead of horizontal scrolling, keeping ancestor navigation visible.
+- 10d8e92: Keep Cmd/Ctrl+Period available for node zoom when the owner-only Amp feedback widget is loaded.
+- a220849: Fade navigation and the Add node button while typing in a node, and restore them when you move the pointer, tap, scroll, or use Escape or Tab.
+- 80ae12d: Cmd+K now opens the URL popover when text is selected inside a node. Without a text selection, it still opens the command menu.
+- a699d67: Keep the focused node and exact caret position when toggling Spotlight mode from Cmd+K.
+
+## 1.33.5
+
+### Patch Changes
+
+- 636ddfd: Move selected nodes together with Cmd/Ctrl+Shift+Up or Down while preserving their order and selection.
+
+## 1.33.4
+
+### Patch Changes
+
+- 9fdbfdd: Tags in zoomed titles grow with their text instead of clipping inside a short pill.
+
+## 1.33.3
+
+### Patch Changes
+
+- 5ad11cf: Keep the focused mirror ring visible at the outline canvas edges.
+
+## 1.33.2
+
+### Patch Changes
+
+- a4fe420: Bottom sheets stay anchored to the bottom while opening on iOS. Tapping a menu no longer highlights its first item; keyboard opening and form focus still work.
+
+## 1.33.1
+
+### Patch Changes
+
+- 32631ee: Temporarily disable the Day stream because scrolling between days can jump or skip. We're working to bring it back. Daily notes now open one day at a time, with Today and calendar navigation still available. Existing notes and saved preferences are preserved.
+
+## 1.33.0
+
+### Minor Changes
+
+- 20a98c7: Use Liquidglass bottom sheets on narrow screens, with half-height opening,
+  handle expansion, keyboard-aware sizing, and corrected dismissal and focus
+  handoffs. Desktop menus stay unchanged.
+
+## 1.32.3
+
+### Patch Changes
+
+- c3fade0: The home screen icon now leaves room around its circle, so it no longer crowds the tile's edges. If you already added Dotnot to your iPhone home screen, remove it and add it again to get the new icon.
+
+## 1.32.2
+
+### Patch Changes
+
+- b9a5b92: Keep header and subheaders above a separately scrolling outline in a screen-height editor.
+
+## 1.32.1
+
+### Patch Changes
+
+- 2e5abf3: A running focus session now shows as a solid bar in the app's primary color, so it stands out from the page in light and dark mode. Long titles stay readable when the bar is crowded, and timers past an hour show hours. On phones, the header's scroll fade no longer covers the bar.
+
+## 1.32.0
+
+### Minor Changes
+
+- aba7154: On phones, the header is now a Liquid Glass toolbar. Zoomed pages show Back to the parent page, with a menu of every ancestor beside it. Search, the new More menu, and Quick add sit on the right. More holds the view options and the account and help items.
+
+## 1.31.0
+
+### Minor Changes
+
+- 4a85b86: Mobile puts Home and Today in a glass navigation dock, with Search and Quick-add
+  in the top toolbar. Filter this view moves into View options. Accessibility
+  preferences use an opaque dock; desktop navigation stays unchanged.
+
+## 1.30.3
+
+### Patch Changes
+
+- 36487a4: Remove the retired alternate sync engine and its migration tooling while preserving retained storage, backups, account erasure, and cutover restore guards.
+
+## 1.30.2
+
+### Patch Changes
+
+- e37c101: Bible references recognize more book-name typos while preserving numbered books and chapter and verse bounds.
+
+## 1.30.1
+
+### Patch Changes
+
+- 985d921: Keep the line you are typing visible above the mobile keyboard and editing toolbar as text wraps, including in a zoomed node's title.
+
+## 1.30.0
+
+### Minor Changes
+
+- 951cad7: Settings now groups Bible references, Daily notes, Embeds, and Focus sessions under one Plugins section. Each plugin's options open in place, one at a time, and every option saves on its own. Focus sessions can now be turned off.
+
+## 1.29.13
+
+### Patch Changes
+
+- d94cefc: Swipe from a bullet dot to scroll, or hold before dragging to reorder. Touch reorders no longer request editor focus and open the keyboard.
+
+## 1.29.12
+
+### Patch Changes
+
+- 26e2983: Navigate the node-selection actions menu with the keyboard without losing the selected nodes. Arrow keys, Home, End, typeahead, Enter, and Space work in the menu; Escape returns to editing.
+
+## 1.29.11
+
+### Patch Changes
+
+- 243a672: Keep the daily-note caret above the mobile toolbar when late prepend measurements or viewport resizing follow typing.
+
+## 1.29.10
+
+### Patch Changes
+
+- 7d032af: Keep filtered node selections on visible siblings, including mirror instances, so bulk actions do not include hidden sibling roots.
+
+## 1.29.9
+
+### Patch Changes
+
+- 511f103: Backspace removes the empty line inserted above a parent by Enter, preserving its children and caret. Empty parents are no longer mistaken for disposable blank lines.
+
+## 1.29.8
+
+### Patch Changes
+
+- 996955f: Keep selection exit and deletion focus outside a mirror's expanded subtree.
+
+## 1.29.7
+
+### Patch Changes
+
+- 2203ed7: Keep typing responsive when a leaf stops matching a text or tag filter in an outline without mirrors.
+
+## 1.29.6
+
+### Patch Changes
+
+- 9d1c60e: Keep rapid typing in the new bullet after pressing Enter, even when an earlier render still has pending focus work.
+
+## 1.29.5
+
+### Patch Changes
+
+- 37879e7: Typing under text and tag filters is faster when an edit keeps the same matches in outlines without mirrors. Matching changes and other filters keep their existing behavior.
+
+## 1.29.4
+
+### Patch Changes
+
+- c024ff6: Keep rapid typing in the correct bullet after Enter, and accept edits immediately after undo restores your selection.
+
+## 1.29.3
+
+### Patch Changes
+
+- f4246bf: Reduce repeated tree work when moving nodes in large outlines.
+- 96301bb: Hide mobile editing actions when the software keyboard closes or the focused node leaves the rendered outline.
+
+## 1.29.2
+
+### Patch Changes
+
+- 0c2e9db: Fix spotlight centering when a row receives focus during startup.
+
+## 1.29.1
+
+### Patch Changes
+
+- a3bc63a: Fix Enter retaining selected text, formatting collapsing text selections, and backward selections losing their direction when restored.
+- df71ae3: Keep rapid typing and splits in persistence order. Retain acknowledged splits while recovering missing sync echoes instead of reverting them after eight seconds.
+- 7c7dff4: Release unused redo history after a new edit to reduce memory use in large outlines. Keep redo available when a command does nothing or a large operation rolls back.
+- 60c6d49: Clean up caret listeners when Quick-add closes or a focused title unmounts. Expose locked rows and titles as read-only textboxes, announce disclosure state, and remove inactive disclosure buttons from leaf rows.
+- ea86959: Drag nodes to the correct position after your outline first loads. Pressing Escape after scrolling selected nodes offscreen restores the caret so you can keep typing.
+
+## 1.29.0
+
+### Minor Changes
+
+- 0247b8e: Add Focus sessions: choose a node and a duration, return when you wander, run Pomodoro rounds, and optionally reflect when you finish or let go. Desktop Chrome can pop the session into a floating picture-in-picture card.
+
+### Patch Changes
+
+- a5dd14d: Page bookmarking moves from the header to View options. Use Bookmark this page to save or remove a bookmark; a check mark shows when the page is bookmarked.
+- 58ce7e1: Harden link title fetching by stripping all trailing hostname dots before checking blocked destinations, including internal hosts and browser-only X content.
+
+## 1.28.2
+
+### Patch Changes
+
+- 10093b3: Remove automatic day scroll snapping so dropping a node onto a visible target keeps your reading position and day in view.
+
+## 1.28.1
+
+### Patch Changes
+
+- 9174caf: Keep later days steady while earlier content resizes in the day stream.
+
+## 1.28.0
+
+### Minor Changes
+
+- fc96f11: Split the header menu into View options and Account and help. View actions and display modes stay together, while the avatar opens Settings, release notes, and help. Google linking now supplies a profile photo when available, with an email-initial fallback.
+
+## 1.27.2
+
+### Patch Changes
+
+- 69c914d: Keep the caret above the mobile editing toolbar when typing overlaps a viewport resize.
+
+## 1.27.1
+
+### Patch Changes
+
+- 0011c29: Keep the mobile caret in place when scrolling overlaps loading earlier days.
+- ccc8d9b: Keep link favicons from flashing while typing elsewhere in a node.
+
+## 1.27.0
+
+### Minor Changes
+
+- 178f605: Add Scribble mode for writing without rereading, with Cmd+K, More, and a header off-switch. Existing editor feature and Daily options are also available through Cmd+K.
+
+### Patch Changes
+
+- e9979c2: The week calendar's selection slides between days again, and snaps when reduced motion is enabled.
+  Opening a mobile sheet no longer lets background Day stream loading dismiss it.
+- 8d4f11c: Daily notes restore focus when entries arrive after the editor loads, and keep earlier days from appearing during a held scroll gesture.
+- d05b3fa: Typing right after opening Today keeps your entry in view while earlier days load above it.
+
+## 1.26.3
+
+### Patch Changes
+
+- 0f47af7: Keep the selected Day stream title below the header after tapping Today or a calendar day, even as content loads. Preserve the writing caret without competing scroll adjustments, and let scrolling or editing take over immediately.
+
+## 1.26.2
+
+### Patch Changes
+
+- bc39c7e: Reduce repeated work when pasting, undoing, and editing large outlines.
+
+## 1.26.1
+
+### Patch Changes
+
+- fd41273: Reuse day-stream layout and unchanged day content while scrolling, and keep empty-day page sizes current when the viewport resizes.
+
+## 1.26.0
+
+### Minor Changes
+
+- 8c09c3e: Daily notes now read as a day stream: scroll from one day to the next, with empty days ready to write in. Settings can fold or skip empty days, hide the week strip, or turn the stream off.
+
+## 1.25.2
+
+### Patch Changes
+
+- ff3e54b: Dotnot's MCP connection now advertises its icon for clients that support displaying it.
+
+## 1.25.1
+
+### Patch Changes
+
+- b7bc41d: Shorten zoom, filter, and collapse animations. Make keyboard Spotlight alignment instant and respect reduced motion in overlays, the filter band, and Daily-note loading feedback.
+
+## 1.25.0
+
+### Minor Changes
+
+- b330b39: Format text on your phone: select text and the bar above the keyboard shows bold, italic, strikethrough, underline, highlight, spoiler, and link. Native formatting commands use the same toggles, and adding a link opens a sheet with the URL field ready.
+
+## 1.24.0
+
+### Minor Changes
+
+- 2a66ed4: Add optional Embed nodes with account-wide permission for YouTube, Vimeo, Spotify, and X previews. Preserve source links, child notes, mirrors, and OPML kind metadata. CLI and MCP can explicitly create Embeds. X uses the official client widget without server-side tweet data.
+
+  Edit a link's URL, title, and display from one pencil button. Use a native sheet on mobile and an anchored popover on desktop. Apply the draft with Done or discard it on dismissal.
+
+- 2a66ed4: Fetch titles for new URLs in prose, structural paste, Add Link, Quick-add, external capture, and CLI/MCP text writes. Preserve custom labels, code, spoilers, literal paste, and existing URLs. Late results do not replace edited text or recreate deleted nodes.
+
+## 1.23.3
+
+### Patch Changes
+
+- e6e9a37: Mobile menus use React Aria sheets with native scrolling and swipe-to-dismiss. Typing suggestions use a compact panel above the keyboard, keeping the editor focused and avoiding page jumps when filtering or dismissing results. The app now accounts for screen safe areas with viewport-fit coverage.
+
+## 1.23.2
+
+### Patch Changes
+
+- d887f13: Undo and redo in the filter input now edit the query without changing your outline.
+
+## 1.23.1
+
+### Patch Changes
+
+- aa1dc01: Keep the Daily note selection pill on its horizontal track when switching days from a scrolled page.
+
+## 1.23.0
+
+### Minor Changes
+
+- acf45d4: Let Daily notes use account-wide Sunday- or Monday-start Calendar weeks.
+
+## 1.22.0
+
+### Minor Changes
+
+- 937697a: Nodes can now be locked so their content and descendants stay read-only in the editor, CLI, and MCP.
+
+## 1.21.0
+
+### Minor Changes
+
+- 10a04f0: Nodes and selected groups can now be moved between Daily notes by dragging them onto a date in the week calendar.
+
+## 1.20.0
+
+### Minor Changes
+
+- 87f1973: YouTube video URLs now unfurl to their video titles when pasted.
+
+## 1.19.3
+
+### Patch Changes
+
+- b1e1c8a: Download the experimental Apple Shortcut as a signed Dotnot file from app.dotnot.example. New imports ask only for a capture key and enable Share Sheet and Spotlight input; existing installed copies do not update automatically.
+
+## 1.19.2
+
+### Patch Changes
+
+- 6072a91: Delete empty plain nodes reliably with Backspace on iPhone Safari.
+
+## 1.19.1
+
+### Patch Changes
+
+- 7711127: Fix the experimental Apple Shortcut's unrecognized actions, invalid attempt IDs, and success receipts. Compile from Cherri, use two six-digit random numbers within Shortcuts' supported range, preserve receipt newlines, and compare the saved Boolean numerically rather than as localized text. Bind setup questions to their parameters and give conditional blocks distinct IDs. Update the installer to the verified credential-free iCloud share. the maintainer reports successful single-node capture from a personal copy; broader iPhone installation and failure-case checks remain unverified.
+
+## 1.19.0
+
+### Minor Changes
+
+- bb4f603: Find CLI installation, browser login, and a safe first command in Settings → Connections. Settings now groups Connections, Editor features, and Appearance, with billing, account, and data controls under Other settings.
+
+  Turn Bible references or Daily notes off without deleting content. Preferences follow your account; Daily scaffold protection and explicit CLI/MCP daily operations stay active. Quick-add saves to the top level when Daily notes is off.
+
+## 1.18.2
+
+### Patch Changes
+
+- 09db575: Completed nodes briefly show their completed state, then fade out when hidden. Keyboard focus moves to a surviving node instead of disappearing with the completed node.
+
+## 1.18.1
+
+### Patch Changes
+
+- 7d4d088: On narrow screens, commands, suggestions, More actions, calendar, breadcrumbs, and quick-add destinations open in bottom drawers with larger touch targets. Typing suggestions keep your caret in the editor, and closing a drawer leaves your text unchanged.
+
+## 1.18.0
+
+### Minor Changes
+
+- 4b2b1d2: Add opt-in experimental capture keys and Apple Shortcut setup on every plan, for appending thoughts and links to daily notes. Enable External quick-add in Settings → Experimental. End-to-end real-iPhone verification remains pending.
+
+## 1.17.0
+
+### Minor Changes
+
+- 8e033ff: Undo and redo are available in More, the command center, and the mobile editing
+  bar, with familiar text grouping and restored caret or node selection. Quick-add
+  keeps undo within the current thought. Hidden changes show a brief confirmation;
+  edits from another tab, device, or app clear history to protect newer work.
+
+## 1.16.5
+
+### Patch Changes
+
+- b16a040: Keep a focused node visible while editing under a filter, even when it stops matching. Apply the filter again when the node loses focus.
+
+## 1.16.4
+
+### Patch Changes
+
+- 86d6316: Use Classic outline sync for all browser and agent access. Remove the upgraded-sync beta toggle and experimental runtime while retaining migration archives and recovery tooling.
+
+## 1.16.3
+
+### Patch Changes
+
+- c576c5c: Add guarded recovery for older outlines with broken parent or sibling links, preserving notes and daily mappings.
+
+## 1.16.2
+
+### Patch Changes
+
+- 54f6c88: Add a one-account migration option that keeps the experimental outline as the working outline and preserves Classic-only notes and meaningful alternatives as separate editable recovery copies. Both original snapshots remain archived.
+
+## 1.16.1
+
+### Patch Changes
+
+- f1ec3f8: Add a reviewed recovery path that keeps your chosen Classic outline unchanged, archives both sync copies, and can add separate editable copies of experimental content without replacing your current notes.
+
+## 1.16.0
+
+### Minor Changes
+
+- b143186: MCP and CLI search now use DQL, the app filter's query language. Find incomplete tagged tasks with `is:todo -is:complete #dotflowy`, scope searches to a subtree, and retrieve every match through pagination. Mirrors match source content, and spoiler interiors remain redacted before matching.
+
+  If an agent prompt or script searches for a multiword phrase, add DQL quotes: use `"release notes"` instead of `release notes`, which now means both words anywhere in the same node. MCP search returns 25 matches by default, with `nextCursor` for continuation. CLI search adds `--node`, `--limit`, `--cursor`, and `--all --json`.
+
+## 1.15.3
+
+### Patch Changes
+
+- 70e8725: Backspace at the start of a task now removes its checkbox on mobile, matching desktop behavior while keeping the node and its text.
+
+## 1.15.2
+
+### Patch Changes
+
+- 24beedd: Center the command menu in the visible viewport and keep it above the mobile keyboard, with scrollable results.
+
+## 1.15.1
+
+### Patch Changes
+
+- c8bc774: Keep the mobile editing toolbar aligned with the visible viewport as the keyboard opens, closes, or pans the page.
+
+## 1.15.0
+
+### Minor Changes
+
+- 20b9d61: Add a separately packaged CLI with full MCP tool access, browser login, OS credential storage, and JSON output for scripts.
+
+### Patch Changes
+
+- eba7d82: On a phone-sized screen, spotlight focus sits the lit line just under the sticky header instead of the vertical center, so the keyboard no longer covers it. Desktop centering is unchanged.
+- 13d7aad: Returning Home or zooming out preserves your saved expansion choices instead of opening every ancestor. Focus returns to the node you left, or its closest visible ancestor if that node is hidden.
+- 09845b7: Prevent interrupted credential updates from racing login or logout, preserve cleanup state after failed keyring transitions, and redact bearer tokens from JSON error output.
+- 13d7aad: Keyboard filter suggestions keep your selected row when the filter opens, so Enter inserts the suggestion instead of closing the input.
+
+## 1.14.0
+
+### Minor Changes
+
+- 08d5fcd: Spotlight mode adds breathing room above the outline, so a short list floats near the center of the viewport, and the focused line eases to the vertical center — a quick beat on keyboard, a fuller ease on click. Replaces an earlier, heavier centering attempt.
+
+## 1.13.0
+
+### Minor Changes
+
+- 178df51: Spotlight mode now slides the line you're editing to the vertical center of the screen.
+
+## 1.12.1
+
+### Patch Changes
+
+- 216969c: Bump the experimental sync engine's alpha packages and regenerate codegen. Worker MCP applyChangeOps keeps a typed cast for a nullable FunctionReference codegen quirk.
+
+## 1.12.0
+
+### Minor Changes
+
+- 9bce616: MCP daily-note tools now accept an optional `timeZone` so an omitted `date` resolves to the user's own today instead of UTC.
+
+## 1.11.3
+
+### Patch Changes
+
+- 13d67ba: Fixed MCP tools failing on experimental-sync accounts. Date-targeted tools (`add_to_today`, `add_subtree` with a date, `mirror_to_today`) and `delete_node` hit a SQLite compound-SELECT limit; writes now scope to their table, and tool errors report the real cause instead of "internal error".
+
+## 1.11.2
+
+### Patch Changes
+
+- f9531e7: Handle MCP persistence failures as ToolError results and keep live-node index reads formatted.
+
+## 1.11.1
+
+### Patch Changes
+
+- 099483e: The first daily command of a new day now works with the experimental sync beta on. Creating the day note reported "Couldn't open today's daily note" even though it had been written. The /today route now waits for the outline to load before it opens the note.
+- 099483e: Mirror to Today now works with the experimental sync beta on, and undo after a daily command no longer deletes unrelated nodes
+
+## 1.11.0
+
+### Minor Changes
+
+- 58870b7: Backspace at the start of a bullet now joins it into the row above, the inverse of the Enter split — the two texts merge, the caret lands at the seam, and one undo puts both back. If the row above is blank, the blank is simply removed — so pressing Enter at the start of a bullet and then Backspace puts you back exactly where you were. A merge that can't happen says so instead of doing nothing: the row shakes, and where the reason is invisible (a bullet hidden by a filter or by "Show completed" sitting between the two rows, or a mirrored row) it also explains itself. Bullets with children, and the empty-bullet and to-do Backspace behavior, are unchanged.
+
+### Patch Changes
+
+- 026a157: Fix Enter at the start of a bullet: it now inserts a blank bullet above and leaves the bullet you were on completely alone — same text, same children, same id — instead of blanking it and handing its text to a new bullet below (which detached children onto the blank line and silently moved node identity out from under bookmarks, links, mirrors, and daily mappings). The caret stays where you were typing.
+
+## 1.10.5
+
+### Patch Changes
+
+- c1c0a7a: Fix multi-paragraph paste on upgraded sync: send a small change-ops delta instead of a full-outline restore that hit "Body too large", and keep pasted sibling order when a corrupted sibling-chain fan would otherwise scramble orphans after refresh.
+
+## 1.10.4
+
+### Patch Changes
+
+- c9729c7: Reattach orphaned Daily days after upgraded-sync cutover (structure sync on force remigrate + calendar orphan heal)
+
+## 1.10.3
+
+### Patch Changes
+
+- fb282fa: Stuck upgraded-sync migrates that reported "complete" while Daily stayed empty can be unstuck from the browser console: force a classic KV re-import (or a full missing-nodes + KV remigrate) instead of no-oping forever.
+
+## 1.10.2
+
+### Patch Changes
+
+- 7dafec3: Upgraded outline sync migrate no longer fails when healing daily-index/KV (unscoped patch UNION bug on Workerd SQLite).
+
+## 1.10.1
+
+### Patch Changes
+
+- c0dba55: Heal incomplete classic→upgraded-sync migrate: backfill daily-index (and other side-collections) when outline nodes already landed, so Daily is not left empty after opting in.
+
+## 1.10.0
+
+### Minor Changes
+
+- 1922c1e: Opt-in experimental outline sync in Settings (classic sync stays the default; preference syncs across devices). Fixes typed text vanishing after a Settings round-trip, and big-delete / mirror-instance delete on the beta path. More menu lists actions first and restores Copy as Markdown; Settings no longer names the sync engine.
+
+## 1.9.1
+
+### Patch Changes
+
+- e8101a1: Date NL: weekday `[[` picks, Next/Last week·month·year catalog, chip relative voice, scaffold-only Cmd+K jumps
+
+## 1.9.0
+
+### Minor Changes
+
+- 3c5115d: `[[` picker accepts calendar-complete natural-language dates; zoomed days show date-mention backlinks
+- fa31f7b: Public What's new on dotnot.example — homepage teaser plus a full /changelog page, no sign-in required.
+- 3c5115d: Go to any date: Cmd+K natural-language date jump (chrono) and a week-strip month calendar picker
+
+## 1.8.0
+
+### Minor Changes
+
+- 2df49d5: Week calendar strip on daily notes: when zoomed on a day, a subheader strip shows the day's ISO week for one-click day-to-day navigation, with chevron paging and a content dot on days you've written in.
+
+## 1.7.1
+
+### Patch Changes
+
+- 7d368f1: Paragraph nodes now use a gentler align-left glyph in place of the pilcrow, with a softer, less invasive color. Same spot, same zoom and drag.
+
+  For anyone wondering, the icon exists because the paragraph node needs a visual signifier that it's zoomable.
+
+## 1.7.0
+
+### Minor Changes
+
+- 8e46728: Signup can now open to the public with Cloudflare Turnstile and email verification. A new `SIGNUP_OPEN` switch (fail-closed, ships unset) skips the invite requirement when set to "true"; the Turnstile captcha plugin gates signup and password reset when `TURNSTILE_SECRET_KEY` is configured; and email verification is now required, so invited users confirm their address before their first sign-in (existing accounts are grandfathered verified).
+- 251b9bd: Launch-day waitlist announcement. A new admin-only `POST /api/admin/announce` endpoint (same shape and admin gate as `/api/admin/invite`) emails the "Dotnot is open" blast to waitlist rows through the one email seam, and `bun run announce` drives it in resumable batches. A `notifiedAt` stamp on the waitlist row (migration 0009) makes the send at-most-once, so the script is safe to re-run without double-sending.
+
+### Patch Changes
+
+- dec36b2: Breadcrumbs read as text, not source: a bullet titled `**Sprint goals**` now
+  shows up in the trail as "Sprint goals" instead of wearing its asterisks. Inline
+  code loses its backticks in every label surface too, so the command palette and
+  mirror-place lists read the same way.
+- 90ff11b: Signup and password reset now ask you to confirm the password, so a typo can't quietly lock you out of a brand-new or reset account.
+- dec36b2: The "What's new" dialog reads cleanly: entries render their bold and code
+  formatting instead of printing the raw asterisks and backticks, every entry's
+  text starts at the same place regardless of whether it is labelled Added, Fixed,
+  or Changed, and release notes no longer inherit the hard line wraps of the file
+  they were written in.
+
+## 1.6.0
+
+### Minor Changes
+
+- f468f05: You can now delete your account yourself, from the header More menu. Deletion is
+  permanent and immediate: it cancels any active subscription, erases your outline,
+  removes your account, and signs you out. Export your outline as OPML first if you
+  want a copy.
+- 298afc7: Read the Terms of Service and Privacy Policy in the app at /terms and /privacy, linked from the signup screen and the More menu.
+- b9e1c5d: New Settings page: plan & billing, account, connections, data, and appearance in
+  one place. Free accounts see their node usage and can upgrade to Unlimited ($5/mo
+  or $48/yr) or Founding ($99 / 3 years); paid accounts can manage or cancel their
+  subscription. Reach it from the header More menu — which is now slimmer, since
+  theme, text size, import/export, connect apps, and account controls all moved to
+  Settings.
+
+### Patch Changes
+
+- a28b60a: Opening or filing into a daily note is more reliable: creating today's note now waits for the write to durably land before navigating, so a failed save shows a clear message instead of dropping you on a note that vanishes, and "Send to Today" no longer misfiles a node when today's note was just created. Quick-add now keeps your draft and shows an error if today's note can't be opened (instead of silently filing the capture at the top level), and hitting the free-plan limit while opening a daily note shows only the upgrade notice, not a second generic error.
+- 12b66cb: Harden and unit-test the Worker's auth/identity gates: the DO tenant-isolation key (`resolveUserId`), admin allowlist, invite-code backdoor, and email shape check are now a pure, tested module; `BETTER_AUTH_SECRET` is asserted at startup (fail-closed, not silently insecure); admin access can now be pinned to a stable `user.id` (`ADMIN_USER_IDS`) instead of an unverified email; and the SSRF unfurl guard now blocks IPv4-mapped IPv6 loopback/private targets.
+- 0d0a93d: Supervise the live-sync consumer so a bad inbound frame can no longer silently kill sync: the fiber now logs the failure and re-establishes (fetching a fresh snapshot) up to a bounded budget, then shows a persistent "Sync interrupted — reload" notice instead of dying quietly while the connection still looks alive.
+- 0eede6b: Surface a toast when an outline write fails and rolls back, instead of the edit vanishing silently.
+
+## 1.5.0
+
+### Minor Changes
+
+- a741fe4: Every outline is now backed up off-site daily: an automatic sweep exports each account's full outline to separate storage (kept ~90 days), and an operator can restore any account from any day's snapshot — covering losses older than the existing 30-day point-in-time recovery window.
+
+## 1.4.0
+
+### Minor Changes
+
+- f032a3b: Daily notes now organize themselves into a calendar: Daily > Year > Month > Week > Day, with ISO weeks (Monday start, a straddle week lives whole under the month owning its Thursday), everything sorted chronologically, and a week badge plus Cmd+K "This week" jump. Existing daily notes reorganize automatically the first time you touch them — one Cmd+Z undoes it.
+- bc79155: Enforce free-tier entitlements: a free outline is capped at 10,000 live nodes (the DO refuses batches that would grow it past the cap, with an in-app upgrade toast; edits, moves, and deletes are never blocked and an over-cap outline is never locked), and MCP agent access now requires a paid plan (a free token can still handshake and list tools but every tool call is refused with an upgrade message). Paid plans are unlimited on both.
+- 9d6c1aa: Waitlist members can now be turned into invited signups with per-email,
+  single-use invite codes. An admin mints and emails them from the waitlist
+  (`bun run invite`), and a code only works for the address it was sent to, once.
+
+### Patch Changes
+
+- 520ed5b: Your outline can now be restored to any point in the last 30 days. If an outline
+  is lost or corrupted, an operator can roll one user's data back through the
+  Durable Object's built-in point-in-time recovery — isolated to that user, and
+  itself reversible with an undo bookmark.
+- 49d5d78: The `/` command palette and the `#` / `[[` caret pickers now scroll the highlighted item into view, so arrowing past the visible window no longer walks the selection off-screen. Hovering still picks the item under your cursor, but a scrolling list can no longer steal the highlight out from under the arrow keys. Thanks to Dylan Shade (@dpshde) for the fix.
+- 4450c9f: Clicking or drag-selecting the first characters of a to-do's text no longer completes it by accident. The checkbox had an invisible hit area reaching 12px past itself on every side — far enough to sit on top of the text beside it — so a click meant to place a caret landed on the checkbox instead. Its target is now the checkbox itself, and on touch it stays a comfortable 24px wide without growing the box or crowding the text.
+
+## 1.3.1
+
+### Patch Changes
+
+- a76bfe7: The header filter magnifier now shows a subtle "engaged" state the moment you open it (before you've typed a query), and turns solid only once a filter is actually applied. Its active look now tracks what's happening: muted while the search box is just open, solid when your view is genuinely filtered.
+- c8d1a19: Scrollable menus, command palettes, and dialog lists now fade softly at their edges when there's more to scroll, so it's clearer when a list runs past what's visible. The breadcrumb trail and mobile action bar get the same left/right hint. The fade dissolves content into the menu's own surface, and the `/` command menu and the `#`/`[[` caret menus now always stay fully on screen instead of clipping off the right or bottom edge. It's pure CSS with no runtime cost, and falls back cleanly to plain scrolling in browsers that don't support scroll-driven animations.
+
+## 1.3.0
+
+### Minor Changes
+
+- ec7b12f: Quick-add: a distraction-free capture surface. Press `q` (or use the mobile capture button, or the Cmd+K "Quick add" action) to file a thought straight into today's note without ever looking at Today. Rapid-fire with Enter, retarget any capture with the Today chip, and see a running list of what you just captured.
+- ec7b12f: Quick-add gets sharper capture flows. Enter now commits your thought and closes the overlay — and if you weren't looking at where it landed, a toast confirms it with a "Go there" jump. For a burst, Cmd+Enter commits and keeps the overlay open so you can fire off the next one. And turning a capture into a to-do (`/todo` or Mod+D) now shows the checkbox inline, right where you're typing.
+- bd88c0e: Wire Stripe subscriptions via the `@better-auth/stripe` plugin: hosted Checkout
+  (`subscription.upgrade()`), the webhook at `/api/auth/stripe/webhook`, and the D1
+  `subscription` table (migration `0006`). Entitlement reads never call Stripe —
+  `worker/plan.ts` resolves a user's plan from one D1 query — and the founding
+  50-seat cap is enforced server-side at checkout creation. Billing secrets are
+  optional in dev (unset = only the billing endpoints fail).
+
+### Patch Changes
+
+- 81d20da: Sharing a link to the app now shows the Dotnot logo lockup and the new tagline instead of retired copy.
+- ec7b12f: Quick-add now wears the same frame as the Cmd+K command center — a cleaner card with the destination chip trailing the input and a keyboard-hint footer. Same capture behavior, just more at home alongside the command palette.
+- ec7b12f: Quick-add polish: the destination picker now opens as a popover anchored to the "Today" chip instead of rearranging the overlay, so your capture text never jumps while you retarget. On phones, the keyboard-shortcut hints (which you can't press anyway) are hidden.
+
+## 1.2.1
+
+### Patch Changes
+
+- cf52c65: Drag-reorder now follows the active filter: while a `?q=` filter is on, drops target only the visible rows (landing right after the visible predecessor when the real tree has hidden siblings in between), and a drop that lands the node hidden shows a quiet toast instead of silently vanishing it.
+- 651c480: Escape in the filter input reliably clears the text on the second press again — a deferred popover reveal from the summon animation no longer re-opens a popover you already closed.
+- 37d1554: Keyboard navigation now works while a filter is active: Arrow Up/Down (and delete/selection focus landing) walk exactly the rows the filter shows, instead of silently getting stuck on rows the filter hid.
+- 11aa087: Disable pinch-zoom on mobile.
+
+## 1.2.0
+
+### Minor Changes
+
+- 1cd17ff: The header filter magnifier is now a toggle: press to open the filter, press again to clear the query and collapse the row. It lights up solid while a filter is active, so it reads as an on/off control. Filter autocomplete suggestions now ease in after the subheader finishes expanding instead of flashing at a stale position, and respect reduced-motion settings.
+- 718f269: Forgot your password? You can now reset it from the sign-in screen — a reset link lands in your inbox and expires after an hour.
+- 28e18c9: Dotnot now installs to your home screen with a proper app icon (iOS and Android), and links to the app show a rich preview card when shared.
+
+### Patch Changes
+
+- 46aa0e4: When something goes wrong, the app now shows a recover screen instead of a blank page, and errors are reported to us (with your note text scrubbed out) so we can fix them faster.
+- 008cc9a: Error reports now strip the query string from URLs and navigation breadcrumbs, so an active outline filter (`?q=`) or a pasted link can't ride an error report — closing a gap in the note-text scrub.
+
+## 1.1.0
+
+### Minor Changes
+
+- e806f5a: Sign in with Google. Existing accounts connect Google from the More menu ("Connect Google") and can then use either sign-in method; signup stays invite-only, including through Google.
+
+## 1.0.0
+
+### Major Changes
+
+- c77151c: Filter your outline with a query language, and a reworked header.
+
+  **Relearn one gesture:** the header **magnifier now opens the filter**, not the node switcher. The switcher (Cmd+K) moves to a new **⌘ Command-center** button beside it — Cmd+K itself is unchanged.
+
+  Press **Cmd+F** (or the header magnifier, or run "Filter this view" from Cmd+K) to open a filter box in the subheader, then type: free text (a case-insensitive substring of what you see), `"quoted phrases"`, `#tag`, `-` to negate any term, and uppercase `OR` between two terms. It also understands `key:value` operators — `is:todo`, `is:bullet`, `is:paragraph`, `is:mirror`, `is:complete`, `is:agent`, `has:link`, and `highlight:` (bare, or by color like `highlight:red`).
+
+  Filtering is live as you type, and an autocomplete popover suggests operators, their values (with color swatches for highlights), and your existing tags — so nothing is hidden grammar you have to memorize. The filter box now stays resident showing the raw query (the old blur-into-pills behavior is gone); a trailing **X** clears it. A match reveals its own subtree (collapse is respected, and filtering never changes what's collapsed). Escape steps back one layer at a time: close the suggestions, then the text, then the box. The `?q=` filter is shareable and scoped to whatever you've zoomed into.
+
+  **Save the filters you reuse:** click the **Pin** inside the filter box to save the current query (it syncs across your devices). Saved filters lead the filter popover — click to apply, hover to rename or delete — and appear in Cmd+K's empty state beside your bookmarks, ready to run.
+
+### Patch Changes
+
+- 6984fcc: Quieter "What's new" signal: the standalone header button is gone. Unread releases now show as a small notification dot on the "More" menu, and the "What's new" item is emphasized while unread.
+
+## 0.3.0
+
+### Minor Changes
+
+- 19a57a1: Add a `/delete` slash command. Deleting a node was already reachable from the
+  bullet keymap, Cmd+K, and the node-selection menu; this puts it in the `/`
+  palette too, delegating to the same delete funnel (protection guards, the
+  big-subtree confirm, atomic batch, and neighbor-focus all apply).
+
+  The `/` palette and the `#` / `[[` caret pickers also now open on the zoomed
+  page title, not just list bullets, so slash commands, tag autocomplete, and
+  node-link autocomplete all work whether a node is a row or the title you've
+  zoomed into.
+
+## 0.2.0
+
+### Minor Changes
+
+- e89548d: Paragraph nodes. A bullet can now become prose: `/paragraph` swaps its dot for a pilcrow, and the line reads as writing instead of a list item. It stays a full citizen of the outline — it takes children, collapses, zooms, and can be completed — and the pilcrow sits exactly where the dot was, so it still zooms on click and drags to reorder. Copy-as-Markdown writes a paragraph as a plain line, and pasting plain lines brings them back as paragraphs. Agents can read and write them over MCP, and they survive an OPML round-trip.
+- aaf904b: A changelog. Dotnot now ships versioned releases: a "What's new" dialog with an unread badge in the app, and a public feed on GitHub Releases. A running tab notices when the server has moved on and offers to reload.
+
+### Patch Changes
+
+- dc2ebba: Signing out — or signing in on a tab someone else used — now fully reloads the app, so a previous account's outline can no longer appear in, or be written into, a newly signed-in account.

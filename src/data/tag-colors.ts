@@ -1,0 +1,184 @@
+import { queryCollectionOptions } from "@tanstack/query-db-collection";
+import { createCollection } from "@tanstack/react-db";
+import { Schema } from "effect";
+import { useCallback, useSyncExternalStore } from "react";
+
+import { hasWindow } from "../env";
+import { kvDelete, kvFetch, kvPut, toKvKeys, toKvRows } from "./kv-api";
+import { queryClient } from "./query-client";
+import { normalizeTag } from "./tags";
+
+/**
+ * Custom tag colors. A tag's color is **chosen**, not derived -- by default a
+ * tag is a neutral outlined chip (`border-border`), and picking a color fills
+ * it. The choice is keyed by the *normalized* tag name, so it applies to every
+ * instance of that tag everywhere. See docs/adr/0007-custom-tag-colors.md.
+ *
+ * Backed by D1 through the generic /api/kv side-collection store (ADR 0008),
+ * sibling to nodesCollection -- a custom color is shared meaning, not
+ * view-state, so it syncs across devices. Empty by default; absence of a row
+ * means "no color" (the neutral default).
+ *
+ * Color is applied through a single generated stylesheet keyed by `data-tag`
+ * (see {@link tagColorsCss} and TagColorStyles), NOT a per-instance class -- so
+ * recoloring a tag updates one rule and every chip/pill/menu-row repaints with
+ * zero React re-renders.
+ */
+export const TAG_COLORS = [
+  "red",
+  "orange",
+  "yellow",
+  "green",
+  "teal",
+  "blue",
+  "indigo",
+  "purple",
+  "pink",
+] as const;
+
+export type TagColor = (typeof TAG_COLORS)[number];
+
+const TAG_COLOR_SET = new Set<string>(TAG_COLORS);
+
+/** Legacy color names -> current palette. `amber` was renamed to `yellow`
+ *  (identical oklch) when the highlight plugin adopted the shared `--tag-*`
+ *  vars; persisted kv rows may still carry "amber", so resolve it rather than
+ *  silently dropping the user's chosen color. */
+interface LegacyColorAliasMap {
+  [name: string]: TagColor;
+}
+const LEGACY_COLOR_ALIAS: LegacyColorAliasMap = { amber: "yellow" };
+
+/** The current palette color for a stored value, applying legacy aliases;
+ *  null when the value isn't a (known or aliased) palette color. */
+function resolveTagColor(color: string): TagColor | null {
+  const c = LEGACY_COLOR_ALIAS[color] ?? color;
+  // SAFETY: TAG_COLOR_SET contains exactly the TagColor palette, so membership proves the string literal.
+  return TAG_COLOR_SET.has(c) ? (c as TagColor) : null;
+}
+
+const tagColorSchema = Schema.Struct({
+  /** Normalized tag name (no `#`, lowercased) -- the row key. */
+  tag: Schema.String,
+  /** One of {@link TAG_COLORS}. */
+  color: Schema.String,
+});
+
+export type TagColorRow = Schema.Schema.Type<typeof tagColorSchema>;
+
+const KV = "tag-colors";
+
+export const tagColorsCollection = createCollection(
+  queryCollectionOptions({
+    id: "tag-colors",
+    queryKey: ["kv", KV],
+    queryClient,
+    queryFn: () => kvFetch<TagColorRow>(KV),
+    getKey: (row: TagColorRow) => row.tag,
+    schema: Schema.toStandardSchemaV1(tagColorSchema),
+    // Insert and update both upsert the whole row (tiny key->value items).
+    onInsert: async ({ transaction }) => {
+      await kvPut(KV, toKvRows(transaction));
+      return { refetch: false };
+    },
+    onUpdate: async ({ transaction }) => {
+      await kvPut(KV, toKvRows(transaction));
+      return { refetch: false };
+    },
+    onDelete: async ({ transaction }) => {
+      await kvDelete(KV, toKvKeys(transaction));
+      return { refetch: false };
+    },
+  }),
+);
+
+/** Set (or change) a tag's color -- applies to every instance of the tag. */
+export function setTagColor(tag: string, color: TagColor) {
+  const key = normalizeTag(tag);
+  if (!key) return;
+  const exists = tagColorsCollection.toArray.some((r) => r.tag === key);
+  if (exists)
+    tagColorsCollection.update(key, (draft) => void (draft.color = color));
+  else tagColorsCollection.insert({ tag: key, color });
+}
+
+/** Clear a tag's color -- back to the neutral outlined default ("Auto"). */
+export function clearTagColor(tag: string) {
+  const key = normalizeTag(tag);
+  if (!key) return;
+  if (tagColorsCollection.toArray.some((r) => r.tag === key)) {
+    tagColorsCollection.delete(key);
+  }
+}
+
+/**
+ * The override stylesheet body: one rule per colored tag, keyed by `data-tag`
+ * (case-insensitively, so any casing of the tag matches the lowercased key).
+ * The doubled `[data-tag]` bumps specificity above the single-class default so
+ * the fill wins. Invalid colors / unsafe tag names are skipped.
+ */
+export function tagColorsCss(rows: TagColorRow[]): string {
+  const lines: string[] = [];
+  for (const r of rows) {
+    const color = resolveTagColor(r.color);
+    if (color && /^[\p{L}\p{N}_-]+$/u.test(r.tag)) {
+      lines.push(
+        `[data-tag="${r.tag}" i][data-tag]{background:var(--tag-${color});color:var(--tag-${color}-fg);border-color:transparent}`,
+      );
+    }
+  }
+  return lines.join("\n");
+}
+
+// --- Reactive read (mirrors tree-store: subscribeChanges + useSyncExternalStore,
+// not useLiveQuery, which hard-fails the `/` prerender -- ADR 0004). ---
+
+const EMPTY: TagColorRow[] = [];
+let rows: TagColorRow[] = EMPTY;
+const listeners = new Set<() => void>();
+let started = false;
+
+function rebuildFrom(source: TagColorRow[]) {
+  rows = source;
+  for (const l of listeners) l();
+}
+
+function rebuild() {
+  rebuildFrom(tagColorsCollection.toArray);
+}
+
+function ensureStarted() {
+  if (started || !hasWindow()) return;
+  started = true;
+  tagColorsCollection.subscribeChanges(() => rebuild(), {
+    includeInitialState: true,
+  });
+}
+
+function subscribe(cb: () => void): () => void {
+  ensureStarted();
+  listeners.add(cb);
+  return () => {
+    listeners.delete(cb);
+  };
+}
+
+function getRows(): TagColorRow[] {
+  ensureStarted();
+  return rows;
+}
+
+/** All color rows, reactive. Drives the generated stylesheet. */
+export function useTagColorRows(): TagColorRow[] {
+  return useSyncExternalStore(subscribe, getRows, () => EMPTY);
+}
+
+/** The current color of one tag, reactive (for the picker's selected swatch). */
+export function useTagColor(tag: string): TagColor | null {
+  const key = normalizeTag(tag);
+  const getSnapshot = useCallback(() => {
+    const row = getRows().find((r) => r.tag === key);
+    return row ? resolveTagColor(row.color) : null;
+  }, [key]);
+  return useSyncExternalStore(subscribe, getSnapshot, () => null);
+}

@@ -1,0 +1,102 @@
+---
+status: accepted
+---
+
+# Spotlight focus mode
+
+**What.** An opt-in view mode that dims the outline to 0.3 opacity while a bullet is being edited,
+**except the single focused bullet**, which stays full — so the line you're on stands out. Toggled from
+the header More menu ("Spotlight mode"), default OFF, persisted per-browser in `localStorage`. Dimming is
+live only while a bullet holds the caret; the moment nothing is focused, the whole outline returns to full
+opacity. Spotlight itself never dims the header or subheader (they are chrome, not content).
+The [writing-chrome behavior](./0078-writing-chrome.md) fades them independently while typing.
+When **zoomed**, the root
+renders as the `.zoomed-title` (an `h2`, not an `.outline-row`); it dims like any parent while a child
+bullet is focused and stays full only when the title itself holds the caret — so zooming in and editing a
+child spotlights the child, not the whole page header.
+
+**Why single-node, not the focused node + its ancestor chain (the UX call).** An earlier draft lit the
+active _branch_ (focused bullet + every ancestor up to the zoom root). We dropped the ancestors. Dimmed
+context at 0.3 is still legible, so lighting the ancestors doesn't _add_ context you'd otherwise lose — it
+only dilutes the focus and produces a "ladder" of full-opacity rows (node + each parent) interleaved with
+dimmed siblings, which reads busier than one crisp bright line against a uniform dim field. For a _focus_
+mode, the calmer single line is the point, and it matches the intent ("mainly focus on the current node").
+If deep trees ever feel unmoored, the graceful upgrade is a **three-tier gradient** (active 1.0, ancestors
+~0.6, rest 0.3), NOT full-bright ancestors — recorded here so the next reach is the gradient, not a revert.
+
+**Why the dim is pure CSS (the load-bearing decision).** Dropping ancestors is what makes this a CSS-only
+effect. Single-node lighting is exactly `:focus-within`, and "dim only while a caret is in the outline" is
+exactly `:has(.node-text:focus)`:
+
+```css
+.spotlight-on:has(.node-text:focus) .outline-row {
+  opacity: 0.3;
+}
+.spotlight-on li[data-node-id]:focus-within > .outline-row {
+  opacity: 1;
+}
+```
+
+So there is **no JS in the dim path at all** — no focus listeners, no generated stylesheet, no tree walk.
+The only JavaScript is the engine (`src/data/spotlight.ts`) toggling two `<body>` classes: `spotlight-on`
+(the mode, driven by the `localStorage` toggle via a `SpotlightController` mounted at the root) and
+`spotlight-fade` (the input modality, below). At rest — nothing focused — `:has` fails and the outline is
+full; node **multi-selection mode needs no special-casing** because it has no caret by construction
+(ADR 0018), so `:has(:focus)` is already false and its own tint carries focus.
+
+**Transition is input-modality-aware.** Keyboard navigation snaps instantly; a pointer click eases (~120ms
+opacity fade). A global `keydown`/`pointerdown` capture listener adds/removes `spotlight-fade` on `<body>`,
+and the CSS gates the transition on that class. Rationale: rapid arrow-key nav through bullets must feel
+immediate, but a deliberate click into a distant node can afford a soft fade. `prefers-reduced-motion`
+forces instant regardless. Dim = 0.3 is a single tunable CSS value.
+
+**Why per-browser `localStorage`, not a synced setting.** Spotlight is an ephemeral view preference, not
+user data. Syncing it across devices would mean a new `/api/kv` side-collection + Effect Schema + wiring for
+a toggle whose value rarely needs to follow the user. `localStorage` is the right weight; promotion to a
+synced settings collection is a clean later move. It is a real user toggle, **not** a `dotflowy:flag:*` dev
+flag — those are default-ON rollback hatches deleted after dogfooding; this is default-OFF and persists.
+
+**The on-state header indicator (awareness + off-switch).** At rest — no caret in the outline — the
+pure-CSS dim shows _nothing_, so there is no passive signal that the mode is even on, and turning it off
+means digging into the More menu. Both are fixed by one control: `SpotlightIndicator`
+(`src/components/spotlight-indicator.tsx`), a chip in the header's right cluster (leading it) that is
+present **only while spotlight is on** and, clicked, turns it off. Three calls, each with its rejected
+alternative:
+
+- **Header, not the subheader band.** A subheader banner ("Spotlight mode is on") would spell the state
+  out loudest, but it costs a full extra row of vertical chrome and collides with the tag filter (the sole
+  subheader tenant) — and shouting is exactly what a _calm_ focus mode shouldn't do. A header chip costs
+  zero vertical space and sidesteps the coexistence problem entirely.
+- **Present-only-when-on, not a permanent toggle.** The chip's mere presence _is_ the awareness signal:
+  present-vs-absent is a bigger perceptual delta than a permanent button's lit-vs-dim, and it keeps the
+  header uncluttered for everyone who never enables the mode. Turning spotlight _on_ stays in the More menu
+  - Cmd+K; this surface is awareness + off only. Mirrors `BookmarkStar`'s "render nothing when N/A."
+- **A solid fill carries the state on mobile.** The app is grayscale (`--primary` is chroma-0), so a
+  low-opacity tint reads as an ordinary ghost-button hover — invisible. The active chip is a **solid**
+  `--primary` pill (the grayscale system's "active" idiom, same emphasis as the daily "Today" badge),
+  unmissable at icon-only size. The chip is **icon-only on every breakpoint** — the "Spotlight" label is
+  always an SR-only span, and a `title` tooltip carries the text affordance for pointer users. An earlier
+  version spelled the label out on desktop, but the visible text distracted and stole horizontal space
+  from the breadcrumb and the other header controls; since the solid fill plus present-only-when-on already
+  carry awareness (the label was only ever belt-and-suspenders), dropping it costs nothing. No toast on
+  click — the chip vanishing plus the outline no longer dimming is feedback enough.
+
+**Rejected alternatives.**
+
+- **A subheader "Spotlight mode is on" banner.** Loudest awareness, but a permanent extra row that fights
+  the mode's calm intent and collides with the tag filter. See the header-indicator note above.
+- **Ancestor-chain (active + parents) lit.** Busier "ladder" look that dilutes focus; the dimmed parents
+  are already legible at 0.3, so it buys little. The three-tier gradient is the fallback if context is ever
+  needed, not this.
+- **Generated stylesheet keyed on `data-node-id` + `focusin`/`focusout` listeners (a la `TagColorStyles`).**
+  This was the right tool _while_ the design lit ancestors — a flat, non-nested list (ADR 0019) can't reach
+  ancestors with a CSS descendant selector, so it needed a JS tree-walk emitting an explicit id list.
+  Single-node removed that need entirely, and pure CSS is simpler, has no client/DO drift surface, and can't
+  fall out of sync with the DOM. Kept in git history, not the code.
+- **Focused-id in React state, dim per row.** Re-fights the per-node render budget (ADR 0014): focus changes
+  on every caret move, so this would re-render rows on each arrow-step.
+- **Synced setting.** Overweight for an ephemeral view preference (see above).
+- **A `dotflowy:flag:*` dev flag.** Wrong lifecycle: this is a permanent opt-in mode, not a rollback hatch.
+- **Typewriter (center-scroll the active line).** An attempt (PR #340) was
+  reverted; a small centering came back alongside static breathing room — see
+  [ADR 0060](./0060-spotlight-breathing-room.md).

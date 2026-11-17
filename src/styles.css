@@ -1,0 +1,2812 @@
+@import "tailwindcss";
+@import "shadcn/tailwind.css";
+@import "tw-animate-css";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+@import "./themes.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-ink: var(--ink);
+  --color-primary-ink: var(--primary-ink);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+  --font-heading: var(--font-sans);
+  --font-sans: "Geist Variable", sans-serif;
+  --font-mono:
+    "Geist Mono Variable", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+:root {
+  --background: oklch(0.98 0 0);
+  --foreground: oklch(0.27 0 0);
+  --card: oklch(0.99 0 0);
+  --card-foreground: oklch(0.27 0 0);
+  --popover: oklch(0.99 0 0);
+  --popover-foreground: oklch(0.27 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  /* 0.55, not shadcn's 0.556: 4.5:1 on this background (ADR 0082). */
+  --muted-foreground: oklch(0.55 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  /* 0.56, not shadcn's 0.577: 4.5:1 on this background (ADR 0082). */
+  --destructive: oklch(0.56 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --radius: 0.625rem;
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
+  /* Outline ink (ADR 0082): bullet dots, quote bars, paragraph glyphs. The
+   * default theme keeps its historical accent-foreground; any other theme
+   * draws them from foreground, since shadcn pairs accent-foreground with
+   * accent, not with the page background. */
+  --ink: var(--accent-foreground);
+  --primary-ink: var(--primary);
+  --spoiler: var(--muted-foreground);
+}
+
+.dark {
+  --background: oklch(0.205 0 0);
+  --foreground: oklch(0.92 0 0);
+  --card: oklch(0.25 0 0);
+  --card-foreground: oklch(0.92 0 0);
+  --popover: oklch(0.25 0 0);
+  --popover-foreground: oklch(0.92 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
+}
+
+/*
+ * Blended accents (ADR 0082): tags, highlights, mirror rings, links, and the
+ * selected Bible-ref atom, in every theme. Each palette color is ONE
+ * mid-lightness hue. A fill keeps a small share of it and takes the rest from
+ * the page background; an ink keeps a larger share and takes the rest from the
+ * foreground. Because foreground already contrasts with background in every
+ * theme, the pair inherits that contrast, and the same rule serves light, dark,
+ * and strongly colored themes (the un-harshify technique, in oklab).
+ */
+:root {
+  --hue-red: oklch(0.64 0.2 25);
+  --hue-orange: oklch(0.7 0.17 55);
+  --hue-yellow: oklch(0.82 0.16 90);
+  --hue-green: oklch(0.68 0.17 150);
+  --hue-teal: oklch(0.68 0.12 195);
+  --hue-blue: oklch(0.62 0.18 255);
+  --hue-indigo: oklch(0.58 0.19 280);
+  --hue-purple: oklch(0.62 0.2 310);
+  --hue-pink: oklch(0.66 0.2 345);
+  --tag-fill-mix: 24%;
+  --tag-ink-mix: 55%;
+  /* Ink keeps the hue but its lightness stays on the readable side of the
+     mode, so a theme with a soft foreground or a strongly colored background
+     cannot pull tag text under 4.5:1. */
+  --ink-l-min: 0;
+  --ink-l-max: 0.42;
+  /* Non-text contrast (WCAG 1.4.11, 3:1 on the page): the quote bar and an
+     unchecked checkbox's edge. Half ink, half page, with lightness kept far
+     enough from the page for a theme with a soft foreground. */
+  --edge-l-min: 0;
+  --edge-l-max: 0.6;
+  --quote-bar: oklch(
+    from color-mix(in oklab, var(--ink) 50%, var(--background))
+      clamp(var(--edge-l-min), l, var(--edge-l-max)) c h
+  );
+  --control-border: oklch(
+    from color-mix(in oklab, var(--foreground) 50%, var(--background))
+      clamp(var(--edge-l-min), l, var(--edge-l-max)) c h
+  );
+}
+
+.dark {
+  --tag-fill-mix: 28%;
+  --ink-l-min: 0.82;
+  --ink-l-max: 1;
+  --edge-l-min: 0.55;
+  --edge-l-max: 1;
+}
+
+:root {
+  --tag-red: color-mix(
+    in oklab,
+    var(--hue-red) var(--tag-fill-mix),
+    var(--background)
+  );
+  --tag-red-fg: oklch(
+    from
+      color-mix(in oklab, var(--hue-red) var(--tag-ink-mix), var(--foreground))
+      clamp(var(--ink-l-min), l, var(--ink-l-max)) c h
+  );
+  --tag-orange: color-mix(
+    in oklab,
+    var(--hue-orange) var(--tag-fill-mix),
+    var(--background)
+  );
+  --tag-orange-fg: oklch(
+    from
+      color-mix(
+        in oklab,
+        var(--hue-orange) var(--tag-ink-mix),
+        var(--foreground)
+      )
+      clamp(var(--ink-l-min), l, var(--ink-l-max)) c h
+  );
+  --tag-yellow: color-mix(
+    in oklab,
+    var(--hue-yellow) var(--tag-fill-mix),
+    var(--background)
+  );
+  --tag-yellow-fg: oklch(
+    from
+      color-mix(
+        in oklab,
+        var(--hue-yellow) var(--tag-ink-mix),
+        var(--foreground)
+      )
+      clamp(var(--ink-l-min), l, var(--ink-l-max)) c h
+  );
+  --tag-green: color-mix(
+    in oklab,
+    var(--hue-green) var(--tag-fill-mix),
+    var(--background)
+  );
+  --tag-green-fg: oklch(
+    from
+      color-mix(
+        in oklab,
+        var(--hue-green) var(--tag-ink-mix),
+        var(--foreground)
+      )
+      clamp(var(--ink-l-min), l, var(--ink-l-max)) c h
+  );
+  --tag-teal: color-mix(
+    in oklab,
+    var(--hue-teal) var(--tag-fill-mix),
+    var(--background)
+  );
+  --tag-teal-fg: oklch(
+    from
+      color-mix(in oklab, var(--hue-teal) var(--tag-ink-mix), var(--foreground))
+      clamp(var(--ink-l-min), l, var(--ink-l-max)) c h
+  );
+  --tag-blue: color-mix(
+    in oklab,
+    var(--hue-blue) var(--tag-fill-mix),
+    var(--background)
+  );
+  --tag-blue-fg: oklch(
+    from
+      color-mix(in oklab, var(--hue-blue) var(--tag-ink-mix), var(--foreground))
+      clamp(var(--ink-l-min), l, var(--ink-l-max)) c h
+  );
+  --tag-indigo: color-mix(
+    in oklab,
+    var(--hue-indigo) var(--tag-fill-mix),
+    var(--background)
+  );
+  --tag-indigo-fg: oklch(
+    from
+      color-mix(
+        in oklab,
+        var(--hue-indigo) var(--tag-ink-mix),
+        var(--foreground)
+      )
+      clamp(var(--ink-l-min), l, var(--ink-l-max)) c h
+  );
+  --tag-purple: color-mix(
+    in oklab,
+    var(--hue-purple) var(--tag-fill-mix),
+    var(--background)
+  );
+  --tag-purple-fg: oklch(
+    from
+      color-mix(
+        in oklab,
+        var(--hue-purple) var(--tag-ink-mix),
+        var(--foreground)
+      )
+      clamp(var(--ink-l-min), l, var(--ink-l-max)) c h
+  );
+  --tag-pink: color-mix(
+    in oklab,
+    var(--hue-pink) var(--tag-fill-mix),
+    var(--background)
+  );
+  --tag-pink-fg: oklch(
+    from
+      color-mix(in oklab, var(--hue-pink) var(--tag-ink-mix), var(--foreground))
+      clamp(var(--ink-l-min), l, var(--ink-l-max)) c h
+  );
+  /* Node mirrors (ADR 0022) and links lean toward the foreground, so they
+     keep 3:1 and 4.5:1 against any background. */
+  --mirror-source: color-mix(in oklab, var(--hue-blue) 75%, var(--foreground));
+  --mirror-instance: color-mix(
+    in oklab,
+    var(--hue-purple) 75%,
+    var(--foreground)
+  );
+  --link: oklch(
+    from color-mix(in oklab, var(--hue-blue) 70%, var(--foreground))
+      min(l, 0.45) c h
+  );
+  --atom-ring: color-mix(in oklab, var(--hue-blue) 80%, var(--foreground));
+  --atom-fill: color-mix(in oklab, var(--hue-blue) 20%, var(--background));
+  --atom-ink: oklch(
+    from color-mix(in oklab, var(--hue-blue) 45%, var(--foreground))
+      clamp(var(--ink-l-min), l, var(--ink-l-max)) c h
+  );
+}
+
+.dark {
+  --link: oklch(
+    from color-mix(in oklab, var(--hue-blue) 70%, var(--foreground))
+      max(l, 0.74) c h
+  );
+}
+
+/* Any non-neutral theme: ink from foreground, and the glass and sheet surfaces
+   tinted from the theme instead of the package's fixed neutral grays. */
+.themed {
+  --ink: var(--foreground);
+}
+
+/* Dotnot uses `accent` as the subtle hover and selection surface, and menus
+   as a raised sheet of the page. Registry themes often use accent as a loud
+   brand color and ship popovers darker than the page (Catppuccin) or pure
+   white (Claude), so every theme derives both here. The doubled class outranks
+   the theme blocks in themes.css. */
+:root.themed.themed {
+  --popover: color-mix(in oklab, var(--background), white 55%);
+  --popover-foreground: var(--foreground);
+  /* A two-color custom theme (ADR 0088) sets accent-source to its second
+     color; every other theme keeps primary. */
+  --accent: color-mix(
+    in oklab,
+    var(--accent-source, var(--primary)) 10%,
+    var(--popover)
+  );
+  --accent-foreground: var(--foreground);
+  /* Secondary is a quiet chip and pulse surface in Dotnot (Bible-ref chips,
+     date chips, the breadcrumb "…", the moved-node flash). Registry themes
+     ship it near-white in dark mode (Claude) or near-black in light (Twitter). */
+  --secondary: color-mix(in oklab, var(--foreground) 8%, var(--background));
+  --secondary-foreground: var(--foreground);
+  /* Text on primary (Today chip, Focus, filled buttons) stays the theme's
+     own choice; the primary moves lightness just enough for it to read. The
+     bounds come from themes.css (generated). */
+  --primary: oklch(
+    from var(--primary-raw) clamp(var(--primary-l-min), l, var(--primary-l-max))
+      c h
+  );
+  /* Links take the theme's primary hue when it has one. */
+  --link: oklch(
+    from var(--link-source, var(--hue-blue))
+      clamp(var(--ink-l-min), l, var(--ink-l-max)) c h
+  );
+  /* Primary used as text (node-link chips) keeps its hue at a readable
+     lightness, like tag ink. */
+  --primary-ink: oklch(
+    from var(--primary) clamp(var(--ink-l-min), l, var(--ink-l-max)) c h
+  );
+  /* The spoiler bar blends the theme's primary into the page, like a tag
+     fill but stronger, so it still reads as a solid redaction. */
+  --spoiler: oklch(
+    from color-mix(in oklab, var(--primary) 45%, var(--background))
+      clamp(var(--spoiler-l-min), l, var(--spoiler-l-max)) c h
+  );
+  --spoiler-l-min: 0;
+  --spoiler-l-max: 0.58;
+  /* Registry muted text is often too faint (Claude light 3.65:1), so it is
+     the theme's own foreground faded toward the page, clamped like tag ink. */
+  --muted-foreground: oklch(
+    from color-mix(in oklab, var(--foreground) 72%, var(--background))
+      clamp(var(--muted-l-min), l, var(--muted-l-max)) c h
+  );
+  --muted-l-min: 0;
+  --muted-l-max: 0.5;
+  /* Destructive menu items and buttons are text and faint tints, so the
+     theme's red keeps its hue at a readable lightness, like tag ink. */
+  --destructive: oklch(
+    from var(--destructive-raw)
+      clamp(var(--destructive-l-min), l, var(--destructive-l-max)) c h
+  );
+  --destructive-l-min: 0;
+  --destructive-l-max: 0.5;
+}
+
+:root.themed.themed.dark {
+  --popover: color-mix(in oklab, var(--background), white 7%);
+  --spoiler-l-min: 0.62;
+  --spoiler-l-max: 1;
+  --muted-l-min: 0.74;
+  --muted-l-max: 1;
+  --destructive-l-min: 0.76;
+  --destructive-l-max: 1;
+}
+
+/* A custom theme (ADR 0088). color-theme.ts injects its colors, light and
+   dark, as `:root.theme-custom` rules; its primary already reads with its own
+   text, so the clamp is open, and links follow it unless a second color
+   sets link-source. */
+:root.theme-custom {
+  --primary-l-min: 0;
+  --primary-l-max: 1;
+  --link-source: var(--primary-raw);
+}
+
+/* The custom theme's Page slider (ADR 0088): a quiet track filled with
+   primary up to --fill, and a thumb drawn like the switch thumbs. */
+.custom-theme-range {
+  appearance: none;
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    var(--primary) var(--fill),
+    color-mix(in oklab, var(--foreground) 12%, transparent) var(--fill)
+  );
+  cursor: pointer;
+  outline: none;
+}
+.custom-theme-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--background);
+  border: 1px solid var(--control-border);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.15);
+}
+.custom-theme-range::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--background);
+  border: 1px solid var(--control-border);
+}
+.custom-theme-range:focus-visible {
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 50%, transparent);
+}
+
+.themed,
+.themed [data-theme] {
+  --lg-sheet-opaque: var(--popover);
+  --lg-surface: color-mix(in srgb, var(--popover) 86%, transparent);
+  --lg-separator: var(--border);
+  --lg-foreground: var(--foreground);
+  --lg-muted: var(--muted-foreground);
+}
+
+:root.themed .mobile-glass-header,
+:root.themed .mobile-actions-bar,
+:root.themed .mobile-navigation {
+  --lg-glass-tinted: color-mix(in srgb, var(--background) 96%, transparent);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    position: relative;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right)
+      env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+  html {
+    @apply font-sans;
+    overscroll-behavior: none;
+  }
+}
+
+/* Only outline routes lock the root. Settings, auth and legal pages retain
+   document scrolling. Safari's keyboard may pan this viewport natively. */
+html:has(.outline-shell),
+body:has(.outline-shell) {
+  height: 100%;
+  max-height: 100%;
+  overflow: hidden;
+  scrollbar-gutter: auto;
+}
+
+.outline-shell {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.outline-chrome {
+  flex: none;
+  z-index: 10;
+  transition-property: opacity;
+}
+
+.outline-chrome,
+[data-outline-add] {
+  transition-duration: 600ms;
+  transition-timing-function: ease-in-out;
+}
+
+/* Keep the reserved space and caret still while navigation fades away.
+ * Keyboard focus always wins, including assistive-technology navigation. */
+.outline-chrome[data-writing]:not(:focus-within),
+.outline-chrome[data-writing]:not(:focus-within)
+  ~ .outline-scroll
+  [data-outline-add]:not(:focus) {
+  opacity: 0;
+}
+
+.outline-chrome[data-writing]:not(:focus-within),
+.outline-chrome[data-writing]:not(:focus-within) *,
+.outline-chrome[data-writing]:not(:focus-within)
+  ~ .outline-scroll
+  [data-outline-add]:not(:focus) {
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .outline-chrome,
+  [data-outline-add] {
+    transition: none;
+  }
+}
+
+.outline-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable;
+  scroll-padding-block: 8px;
+}
+
+/* ADR 0076: navigation below, actions above. Package selectors stay scoped. */
+.mobile-navigation {
+  --lg-foreground: var(--foreground);
+  --lg-tab-accent: var(--foreground);
+  --lg-ring: var(--foreground);
+  --lg-dark: initial;
+  --lg-contrast-small: 0.314;
+  --lg-brightness-small: 1.511;
+  --lg-saturate-small: 2;
+  --dock-tab-width: clamp(100px, calc((100vw - 64px) / 2), 132px);
+  position: absolute;
+  z-index: 20;
+  /* The shell is already inside body's safe-area padding. */
+  bottom: 16px;
+  left: 16px;
+  right: 16px;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.dark .mobile-navigation {
+  --lg-dark: opacity(1);
+  --lg-contrast-small: 0.68;
+  --lg-brightness-small: 0.98;
+  --lg-saturate-small: 1.6;
+}
+
+.mobile-navigation[hidden] {
+  display: none;
+}
+
+.mobile-navigation > * {
+  pointer-events: auto;
+}
+
+.mobile-navigation .lg-tab-bar {
+  --lg-tab-width: var(--dock-tab-width);
+}
+
+.mobile-navigation .lg-tab-bar[data-icons] :is(.lg-tab-face, .lg-tab-copy) {
+  font-size: 0.75rem;
+}
+
+.mobile-navigation-solid {
+  display: flex;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 36px;
+  background: var(--background);
+  color: var(--foreground);
+}
+
+.mobile-navigation-solid a {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  width: var(--dock-tab-width);
+  min-height: 54px;
+  border-radius: 30px;
+  font-size: 0.75rem;
+}
+
+.mobile-navigation-solid svg {
+  width: 28px;
+  height: 28px;
+}
+
+.mobile-navigation-solid a[aria-current="page"] {
+  background: var(--accent);
+  font-weight: 600;
+  outline: 1px solid var(--foreground);
+  outline-offset: -2px;
+}
+
+.mobile-navigation-solid a:focus-visible {
+  outline: 2px solid var(--foreground);
+  outline-offset: -2px;
+}
+
+/* ADR 0076: the narrow-screen glass toolbar. Theme values only, as the dock
+   does; the package draws its own glass, lens and scroll edge. */
+.mobile-glass-header,
+.mobile-actions-bar {
+  --lg-foreground: var(--foreground);
+  --lg-ring: var(--foreground);
+  --lg-fill: var(--primary);
+  --lg-dark: initial;
+  --lg-glass-tinted: #f7f7f9f5;
+  --lg-glass-active: #ffffff57;
+  /* The package's light values, so an OS dark preference cannot override
+     Dotnot's light theme. */
+  --lg-contrast: 0.307;
+  --lg-brightness: 1.554;
+  --lg-saturate: 2.081;
+  --lg-contrast-small: 0.314;
+  --lg-brightness-small: 1.511;
+  --lg-saturate-small: 2;
+  --lg-drop-strength: 1;
+  --lg-fill-shade: 11%;
+  --lg-fill-alpha: 100%;
+}
+
+.mobile-glass-header {
+  gap: 8px;
+  min-height: 60px;
+  padding: 8px max(12px, env(safe-area-inset-right)) 8px
+    max(12px, env(safe-area-inset-left));
+  color: var(--foreground);
+}
+
+.dark .mobile-glass-header,
+.dark .mobile-actions-bar {
+  --lg-dark: opacity(1);
+  --lg-glass-tinted: #1e1e20f2;
+  --lg-glass-active: #ffffff4d;
+  --lg-contrast: 0.66;
+  --lg-brightness: 0.83;
+  --lg-saturate: 1.7;
+  --lg-contrast-small: 0.68;
+  --lg-brightness-small: 0.98;
+  --lg-saturate-small: 1.6;
+  --lg-drop-strength: 1.6;
+  --lg-fill-shade: 0%;
+  --lg-fill-alpha: 95%;
+}
+
+/* Keep glass outside the horizontal scroller so its rim stays intact and the
+   material does not move with overflowing formatting controls. */
+.mobile-actions-bar > :is(.lg-glass, .mobile-actions-solid) {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.mobile-actions-solid {
+  background: var(--background);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mobile-actions-bar button {
+    transition: none;
+  }
+}
+
+.mobile-glass-header-leading,
+.glass-breadcrumb {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+}
+
+.mobile-glass-header-trailing {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.mobile-glass-header :is(.lg-toolbar-group, .glass-header-solid-group) {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.mobile-glass-header .lg-toolbar-group > .lg-button[data-icon="only"] {
+  width: 44px;
+  flex: none;
+}
+
+.mobile-glass-header-trailing > [data-slot="button"],
+.mobile-glass-header
+  :is(.lg-toolbar-group, .glass-header-solid-group)
+  > [data-slot="button"] {
+  border-radius: 50%;
+}
+
+.mobile-glass-header .lg-button[data-variant="filled"] {
+  width: 44px;
+  height: 44px;
+  border-radius: 22px;
+  color: var(--primary-foreground);
+}
+
+.mobile-glass-header .lg-button > :is(svg, .glass-header-badge-host) {
+  width: 22px;
+  height: 22px;
+}
+
+.mobile-glass-header .glass-crumb {
+  min-width: 0;
+  gap: 4px;
+  padding-right: 12px;
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.glass-crumb-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.glass-header-badge-host {
+  position: relative;
+  display: grid;
+  place-items: center;
+}
+
+.glass-header-badge-host > svg {
+  width: 100%;
+  height: 100%;
+}
+
+.glass-header-badge-host [data-changelog-dot] {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--primary);
+  box-shadow: 0 0 0 2px var(--background);
+}
+
+/* The package's scroll-edge band reaches 24px below the toolbar to fade content
+   that scrolls under it. An open subheader sits right there and is opaque, so
+   stop the band at the toolbar instead of washing over the subheader. */
+.outline-chrome:has([data-subheader-open]) .mobile-glass-header::before {
+  bottom: 0;
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+
+/* An inset line, not a border: glass and opaque stay the same height, so the
+   switch after first paint never shifts the page. */
+.mobile-glass-header[data-opaque] {
+  background: var(--background);
+  box-shadow: inset 0 -1px var(--border);
+}
+
+.glass-header-solid-group {
+  display: flex;
+  align-items: center;
+  height: 44px;
+  border: 1px solid var(--border);
+  border-radius: 22px;
+  background: var(--background);
+}
+
+.glass-header-solid-button {
+  display: inline-flex;
+  min-width: 44px;
+  height: 44px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: 22px;
+  color: var(--foreground);
+}
+
+.glass-header-solid-button.glass-crumb {
+  flex: 0 1 auto;
+}
+
+.glass-header-solid-button > :is(svg, .glass-header-badge-host) {
+  width: 22px;
+  height: 22px;
+  flex: none;
+}
+
+.glass-header-solid-button[data-variant="filled"] {
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+.glass-header-solid-button:focus-visible {
+  outline: 2px solid var(--foreground);
+  outline-offset: -2px;
+}
+
+/* Keep native focus restoration without WebKit's ring after pointer dismissal. */
+[data-sheet-trigger][data-sheet-pointer-dismissed]:focus-visible {
+  outline: none;
+}
+
+/* Keep scrolling content within the package sheet's animated corner radius. */
+.lg-sheet {
+  /* A sheet can live inside a glass toolbar. Its generated, size-specific
+     filters must not inherit that much smaller surface's lens during entry. */
+  --lg-filter: initial;
+  --lg-lens-blur: initial;
+  --lg-size-curve: initial;
+  --lg-mask: initial;
+  overflow: clip;
+  /* The dialog follows the visual viewport, which on iOS Safari ends above the
+     floating address bar and the keyboard's accessory bar. A full-height sheet
+     continues its opaque surface below that edge, so the page does not show
+     between the sheet and the keyboard. Partial detents keep their rounded,
+     floating bottom: the strip fades with the sheet's opaque fill. */
+  border: 0 solid transparent;
+  border-image: linear-gradient(var(--lg-sheet-floor), var(--lg-sheet-floor)) 0
+    0 1 0 / 0 0 100vh 0 / 0 0 100vh 0;
+  --lg-sheet-floor: color-mix(
+    in srgb,
+    var(--lg-sheet-opaque) calc(var(--lg-sheet-full, 0) * 100%),
+    transparent
+  );
+}
+
+.lg-sheet-dialog {
+  /* Only the content scrolls. Safari focus panning must not scroll the whole
+     modal while its sheet is entering from below the viewport. The bottom stays
+     unclipped for the sheet's surface below the visual viewport. */
+  overflow: clip visible;
+  left: env(safe-area-inset-left);
+  right: env(safe-area-inset-right);
+  width: calc(100% - env(safe-area-inset-left) - env(safe-area-inset-right));
+}
+
+.lg-sheet-content {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Use the package's opaque surface for accessibility and unsupported browsers. */
+@media (prefers-reduced-transparency: reduce),
+  (prefers-contrast: more),
+  (forced-colors: active) {
+  .lg-sheet {
+    background: var(--lg-sheet-opaque);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+@supports not
+((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .lg-sheet {
+    background: var(--lg-sheet-opaque);
+  }
+}
+
+/* Use the package menu's separator spacing and theme-aware color on glass. */
+.lg-sheet [data-slot="separator"] {
+  width: auto;
+  margin: 10px 16px;
+  background-color: var(--lg-separator);
+}
+
+@media (width < 768px) {
+  .outline-shell:has(.mobile-navigation) .outline-scroll {
+    scroll-padding-bottom: 100px;
+  }
+
+  .outline-shell:has(.mobile-navigation) .outline-scroll > [role="region"] {
+    padding-bottom: 100px;
+  }
+
+  body:has(.outline-header) [data-quick-add-fab] {
+    display: none;
+  }
+
+  .outline-header [data-slot="button"] {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
+@media (width < 768px), (pointer: coarse) {
+  /* A short outline may fill only the layout viewport, leaving no scroll range
+     to lift its caret above suggestions or the keyboard toolbar. Landscape needs
+     the keyboard reservation even when the layout is wider than 768px. Keep it
+     for the editing session: removing it mid-edit clamps Safari's scroll. */
+  .outline-scroll:has(.node-text:focus) > [role="region"] {
+    padding-bottom: max(50vh, var(--outline-keyboard-space, 0px));
+  }
+}
+
+/* Quick-add's draft stays above suggestions, including while the keyboard pans. */
+@media (width < 768px) {
+  .quick-add-popup:has([data-typing-menu-open]) {
+    top: calc(var(--capture-viewport-top) + 1rem);
+    bottom: auto;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    max-height: min(
+      calc(var(--capture-viewport-height) * 0.45 - 1rem),
+      calc(
+        var(--capture-viewport-height) - var(--capture-suggestions-height) -
+          2rem
+      )
+    );
+    transform: none !important;
+  }
+}
+
+.subtitle {
+  @apply text-muted-foreground;
+  font-size: 13px;
+  margin: 0 0 32px;
+}
+
+.outline-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.outline-node {
+  margin: 0;
+}
+
+/*
+ * The leading padding centers the 16px bullet on the breadcrumb Home button's
+ * axis (a 32px icon button flush with the same content column, so its icon
+ * centers 16px in): 8px padding + half the bullet = 16px. Coarse re-declares
+ * `padding` below and reaches 16px with a 4px pad + a 24px bullet, so it needs
+ * no change -- keep the two in step if either box size moves.
+ */
+.outline-row {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 2px 4px 2px 8px;
+  border-radius: 4px;
+}
+
+.outline-row:hover {
+  background: var(--row-hover);
+}
+
+/*
+ * Protection indicator. A muted glyph leading a plugin-protected or owner-
+ * locked node -- a quiet, always-on signifier, not a control. Sits in its own
+ * 20px square between the bullet and the text. The glyph centers inside it and
+ * the square sits 2px below the geometric line-box center, matching the visible
+ * center of Geist's letterforms rather than its font-metric box. It floats
+ * inside .row-body in both render paths. Decorative, so it carries a title
+ * tooltip but no pointer affordance.
+ */
+.protection-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  color: var(--muted-foreground);
+  cursor: help;
+  user-select: none;
+}
+
+/* Center the fixed box on the body text's visible letterforms. */
+.outline-row .protection-indicator {
+  margin-top: calc(var(--reading-line-box) / 2 - 8px);
+}
+
+/*
+ * Trailing node decoration zone (Seam F `*:after-text`, ADR 0031 -- the
+ * anti-ugly node budget). A plugin's rich decorations render at the row's
+ * trailing edge, but the core caps how much of the bullet they may occupy:
+ * `--node-deco-budget` clips the zone and a trailing fade + overflow affordance
+ * signal "more". Freedom is capped by SPACE, not vocabulary, so the outline
+ * surface can't be crowded out no matter what a (trusted, compiled-in) plugin
+ * renders. Spans (valid in both the `<li>` row and the phrasing-only `<h2>`
+ * title), laid out flex. The overflow boolean comes from one ResizeObserver in
+ * NodeDecorations.tsx -- never measured per scroll frame (ADR 0019 / ADR 0014).
+ */
+:root {
+  --node-deco-budget: 200px;
+}
+.node-deco {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  /* Hug the row's trailing edge (works in the flex `.outline-row` regardless of
+     whether `.row-body` grows). */
+  margin-inline-start: auto;
+  align-self: center;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+.node-deco:has(.node-deco-track:empty) {
+  /* Registered slots can render null. Keep an empty zone out of the row's
+     flex layout so it does not reserve a gap beside the content. */
+  display: none;
+}
+.node-deco-zone {
+  display: flex;
+  overflow: hidden;
+  max-width: var(--node-deco-budget);
+}
+/* Fade the clipped trailing edge only while overflowing, so a mid-item cut reads
+   as intentional and a flush fit isn't dimmed for no reason. */
+.node-deco[data-overflowing] .node-deco-zone {
+  -webkit-mask-image: linear-gradient(
+    to right,
+    #000 calc(100% - 22px),
+    transparent
+  );
+  mask-image: linear-gradient(to right, #000 calc(100% - 22px), transparent);
+}
+/* scroll-fade fallback suppression.
+   shadcn's `scroll-fade` utility (in shadcn/tailwind.css) is scroll-aware in
+   browsers with CSS scroll-driven animations. Where those are unsupported
+   (older Safari, Firefox by default) it falls back to a STATIC fade on both
+   edges — which would dim the top/bottom of a short, non-overflowing menu for
+   no reason. We treat the fade as pure progressive enhancement, so null the
+   mask entirely in the fallback path: unsupported browsers get exactly today's
+   plain-scroll behavior, no visual regression. */
+@supports not (animation-timeline: scroll()) {
+  .scroll-fade,
+  .scroll-fade-x,
+  .scroll-fade-y {
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+}
+
+.node-deco-track {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: max-content;
+}
+.node-deco-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  color: var(--muted-foreground);
+  border-radius: 4px;
+}
+.node-deco-more:hover {
+  color: var(--foreground);
+  background: var(--row-hover);
+}
+
+h2 span.protection-indicator {
+  gap: 0px;
+  /* The title line box is reading-size × 1.4 font scale × 1.3 line-height.
+     Apply the same 2px optical correction as body rows. */
+  margin-top: calc(var(--reading-font-size) * 0.91 - 8px);
+}
+
+/*
+ * Completion fade. A row is faded when it's completed or sits under something
+ * completed (data-faded set in OutlineRow). Opacity lives on the row, NOT on
+ * .outline-node, so it never nests with descendant rows -- one uniform fade
+ * level at any depth, never compounding. See ADR 0002.
+ */
+.outline-row[data-faded="true"] {
+  opacity: 0.4;
+}
+
+/*
+ * Tag-filter context dim. While a tag filter is active, a row that's only on
+ * screen as ancestor context for a match below it (not itself a match) is
+ * dimmed so the actual matches read as the foreground. Same opacity lever as
+ * the completion fade, on the row. See ADR 0015.
+ */
+.outline-row[data-context="true"] {
+  opacity: 0.45;
+}
+
+/*
+ * "Acted-upon" pulse. A row briefly tinted bg-card, fading back to transparent,
+ * marks the bullet an action just landed on -- a node you dragged elsewhere, or
+ * the node you jumped to via /move's "Go". Purely visual (the .node-acted class
+ * is added then cleared on animationend in flash-node.ts); never persisted. The
+ * fade keeps card's lightness while dropping alpha to 0 (relative-color `/ 0`),
+ * so it dissolves cleanly instead of graying out through transparent-black.
+ */
+@keyframes node-acted-fade {
+  from {
+    background-color: var(--secondary);
+  }
+  to {
+    background-color: oklch(from var(--secondary) l c h / 0);
+  }
+}
+
+.outline-row.node-acted,
+.zoomed-title.node-acted {
+  animation: node-acted-fade 0.9s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .outline-row.node-acted,
+  .zoomed-title.node-acted {
+    animation: none;
+  }
+}
+
+/*
+ * Spotlight focus mode (ADR 0033). `spotlight-on` on <body> = mode enabled; the
+ * dim itself is PURE CSS. While a bullet caret is focused (`:has(.node-text:
+ * focus)`) every content row drops to 0.3, and the focused row -- and ONLY it
+ * (`:focus-within`) -- stays full. Single-node by design (ADR 0033): dimmed
+ * context is still legible. At rest (nothing focused) `:has` fails, so the whole
+ * outline is full -- which also means node-selection mode (no caret) never dims.
+ * `spotlight-fade` (present only after a pointer interaction) eases the change;
+ * keyboard nav leaves it off so rapid arrow-stepping snaps instantly.
+ */
+.spotlight-on:has(.node-text:focus) .outline-row,
+.spotlight-on:has(.node-text:focus) .zoomed-title {
+  opacity: 0.3;
+}
+
+.spotlight-on li[data-node-id]:focus-within > .outline-row {
+  opacity: 1;
+}
+
+/* When zoomed, the root renders as `.zoomed-title` (an h2, not an `.outline-row`),
+   so it dims like any parent while a child bullet is focused. It stays full ONLY
+   when the title itself holds the caret -- `:focus-within` here must out-specify
+   the dim rule above ((0,5,0) > (0,4,0)), hence the repeated `:has()` prefix. */
+.spotlight-on:has(.node-text:focus) .zoomed-title:focus-within {
+  opacity: 1;
+}
+
+.spotlight-on.spotlight-fade .outline-row,
+.spotlight-on.spotlight-fade .zoomed-title {
+  transition: opacity 120ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spotlight-on.spotlight-fade .outline-row,
+  .spotlight-on.spotlight-fade .zoomed-title {
+    transition: none;
+  }
+}
+
+/*
+ * "Rejected" shake. A protected node (the Daily container) can't be deleted;
+ * rather than silently no-op, the row shakes side-to-side -- the same "no" a
+ * password field gives a wrong entry. One-shot class (`.node-rejected`), added
+ * then cleared on animationend in flash-node.ts. Under reduced-motion the shake
+ * is swapped for a single destructive-tint pulse (below) so those users still
+ * get a signal; that pulse also emits animationend, so the class still clears.
+ */
+@keyframes node-rejected-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  15%,
+  45%,
+  75% {
+    transform: translateX(-5px);
+  }
+  30%,
+  60%,
+  90% {
+    transform: translateX(5px);
+  }
+}
+
+.outline-row.node-rejected {
+  animation: node-rejected-shake 0.4s ease-in-out;
+}
+
+@keyframes node-rejected-pulse {
+  from {
+    background-color: oklch(from var(--destructive) l c h / 0.18);
+  }
+  to {
+    background-color: oklch(from var(--destructive) l c h / 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .outline-row.node-rejected {
+    animation: node-rejected-pulse 0.5s ease-out;
+  }
+}
+
+/*
+ * Node multi-selection slab (ADR 0018). A contiguous run of selected sibling
+ * roots + their subtrees reads as ONE rounded block. Each selected ROOT's `<li>`
+ * is tinted full width -- the background sits behind the whole subtree (the row
+ * and every descendant row nested inside the same `<li>`), so descendants need
+ * no per-row marker. Sibling `<li>`s have margin:0 between them, so contiguous
+ * roots merge into a single slab; only the OUTER corners round (top of the first
+ * root, bottom of the last). The tint is a subtle theme-aware fill derived from
+ * `--primary` (dark-on-light, light-on-dark, so it adapts to both themes); text
+ * stays normally rendered and readable on it. Composes with the row's own
+ * faded/context opacity and hover (those paint on `.outline-row`, above this).
+ */
+.outline-node[data-selected] {
+  background-color: oklch(from var(--primary) l c h / 0.1);
+}
+
+.outline-node[data-selected="top"],
+.outline-node[data-selected="single"] {
+  border-top-left-radius: 6px;
+  border-top-right-radius: 6px;
+}
+
+.outline-node[data-selected="bottom"],
+.outline-node[data-selected="single"] {
+  border-bottom-left-radius: 6px;
+  border-bottom-right-radius: 6px;
+}
+
+/*
+ * Revealed-spoiler tint (ADR 0043). A spoiler run under the caret unfolds to
+ * `||interior||`; the container wears the SAME theme-aware 10%-primary fill as
+ * the multi-selection slab above, so an open spoiler reads clearly in both
+ * themes (a near-white `bg-muted` washed out on the light page). The rest of the
+ * revealed skin (muted text, radius, box-decoration) rides Tailwind on the token
+ * `El`; only this exact from-color + alpha lives here, beside the rule it
+ * mirrors. The folded bar is a solid grey (`bg-muted-foreground`), not this tint.
+ */
+.md-spoiler-reveal {
+  background-color: oklch(from var(--primary) l c h / 0.1);
+}
+
+/*
+ * Node mirrors (ADR 0022, slice 1d). A mirror INSTANCE and its SOURCE each wear a
+ * thin colored ring, revealed only while the caret is within
+ * (:focus-within) -- so a mirror-free outline, and an idle mirror, look exactly as
+ * before. Source hue vs instance hue tells the original apart from its live
+ * copies; a capped row (a cycle) reuses the instance hue. Pure CSS keyed off the
+ * row's `data-mirror`, zero JS -- the tag-color ethos (ADR 0007). The ring sits on
+ * `.outline-row` (the flex line), so depth indentation already offsets it.
+ */
+.outline-node[data-mirror] > .outline-row {
+  outline: 2px solid transparent;
+  /* Keep the full ring inside the row at the canvas's clipped edges. */
+  outline-offset: -2px;
+  transition: outline-color 0.12s ease;
+}
+/*.outline-node[data-mirror="source"]:hover > .outline-row,*/
+.outline-node[data-mirror="source"]:focus-within > .outline-row {
+  /*box-shadow: inset 3px 0 0 0 var(--mirror-source);*/
+  outline: 2px solid var(--mirror-source);
+}
+/*.outline-node[data-mirror="instance"]:hover > .outline-row,*/
+.outline-node[data-mirror="instance"]:focus-within > .outline-row,
+/*.outline-node[data-mirror="capped"]:hover > .outline-row,*/
+.outline-node[data-mirror="capped"]:focus-within > .outline-row {
+  outline: 2px solid var(--mirror-instance);
+}
+
+/*
+ * Collapse/expand chevron. Sits in the left gutter (absolute, so toggling
+ * it never reflows the bullet) and only shows on row hover or while the row
+ * holds focus, except when the row is collapsed, where it stays visible so the
+ * hidden subtree is discoverable. Childless rows render no glyph.
+ */
+.collapse-toggle {
+  position: absolute;
+  left: -15px;
+  /* Absolutely positioned, so it aligns via `top` (not margin) -- but to the
+     same text optical center as the bullet, scaling with the reading size. The
+     24px box centers the chevron, so top = optical center - half the box
+     (ADR 0029). */
+  top: calc(var(--reading-line-box) / 2 - 6.25px);
+  width: 16px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  @apply text-muted-foreground;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+
+.collapse-toggle:hover {
+  color: var(--fg);
+}
+
+/*
+ * A single chevron (points right) rotates to point down when expanded, so
+ * open/close reads as one continuous motion instead of an icon swap.
+ */
+.collapse-toggle svg {
+  transition: transform 0.12s cubic-bezier(0.2, 0, 0, 1);
+}
+
+.collapse-toggle[data-collapsed="false"] svg {
+  transform: rotate(90deg);
+}
+
+.collapse-toggle[data-has-children="false"] {
+  cursor: default;
+}
+
+.outline-row:hover .collapse-toggle[data-has-children="true"],
+.outline-row:focus-within .collapse-toggle[data-has-children="true"],
+.collapse-toggle[data-collapsed="true"] {
+  opacity: 1;
+}
+
+/*
+ * The chevron lives in the empty left margin, so it can grow its tap target
+ * LEFTWARD (into nothing) for a full 44px width without colliding with the
+ * bullet to its right. Anchored to the chevron's right edge so the boundary
+ * with the bullet stays clean.
+ */
+.collapse-toggle.touch-hitbox::before {
+  left: auto;
+  right: 0;
+  width: 44px;
+}
+
+/*
+ * Touch devices have no hover, so the reveal-on-hover chevron would be an
+ * invisible (if tappable) target. Keep it visible for any parent row so the
+ * collapse affordance is discoverable. Childless rows still render no glyph.
+ */
+@media (hover: none) {
+  .collapse-toggle[data-has-children="true"] {
+    opacity: 1;
+  }
+}
+
+.bullet {
+  @apply flex size-4 items-center justify-center border-none bg-transparent p-0 transition duration-150;
+  flex: 0 0 auto;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 99px;
+  /* Swipe to scroll; hold then move to reorder. The drag hook prevents
+     touchmove only after the hold, before native panning takes ownership. */
+  touch-action: manipulation;
+}
+
+.bullet:active {
+  @apply translate-y-px;
+}
+
+/*
+ * Workflowy's zoom affordance: a faint ring behind the dot on hover. The ring
+ * also signifies hidden children -- so only show it when the node is collapsed.
+ * Once expanded, the visible children are the signifier and the ring is noise.
+ */
+.bullet:hover,
+.bullet:has(span[data-has-children="true"][data-collapsed="true"]) {
+  @apply bg-ink/10;
+}
+
+.bullet:hover .bullet-dot {
+  @apply bg-primary-ink;
+}
+
+.bullet-dot {
+  @apply block size-1.75 rounded-full bg-ink/70;
+  transition: background-color 0.15s ease;
+}
+
+/*
+ * A paragraph's glyph (ADR 0045): the align-left mark standing exactly where the
+ * dot would, inside the same 16px `.bullet` button. The button carries the
+ * optical alignment (`.outline-row .bullet` margin-top) and the flex centering,
+ * so the glyph's box center lands on the dot's -- the K constant needs no
+ * companion. Colors mirror `.bullet-dot`'s three states, in `color` rather than
+ * `background-color` since the glyph is a `currentColor` SVG.
+ */
+.bullet-paragraph {
+  @apply flex items-center justify-center text-ink/30;
+  transition: color 0.15s ease;
+}
+
+.bullet:hover .bullet-paragraph {
+  @apply text-primary-ink;
+}
+
+/* Keep the same content column as other Kinds. The wider number handle grows
+   into the left gutter, not into the gap before the text. Its period stays on
+   one axis, even when the ordinal gains digits. */
+.outline-row .bullet:has(.bullet-number) {
+  width: var(--number-width);
+  margin-inline-start: calc(16px - var(--number-width));
+  justify-content: flex-end;
+  height: var(--reading-line-box);
+  margin-top: 3px;
+  padding-inline: 2px;
+  border-radius: 4px;
+  font-size: var(--reading-font-size);
+}
+
+@media not (pointer: coarse) {
+  .outline-row .bullet:has(.bullet-number)::before {
+    min-height: 0;
+  }
+
+  .outline-row:has(.bullet-number) .collapse-toggle {
+    font-size: var(--reading-font-size);
+    left: calc(-15px + 16px - var(--number-width));
+  }
+}
+
+.bullet-number {
+  @apply text-muted-foreground;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  line-height: var(--reading-line-box);
+}
+
+.bullet:hover .bullet-number,
+.bullet:focus-visible .bullet-number {
+  @apply text-primary-ink;
+}
+
+.title-number {
+  @apply text-muted-foreground;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+/*
+ * A quote's bar (ADR 0079): it replaces the dot inside the same `.bullet`
+ * button, so it is the zoom and drag target. The button stretches over the
+ * quote's own line boxes -- the 3px margins match `.node-text`'s 3px padding --
+ * so the bar is exactly as tall as the quotation, and children (sources,
+ * commentary) stay outside it. Width is untouched: 16px on fine pointers, 24px
+ * on coarse, so the bar never crowds the chevron or the caret (ADR 0029). This
+ * selector (0,3,0) outranks both the base optical margin and the coarse
+ * `.outline-row .bullet` override, which a stretched box does not need.
+ */
+.outline-row .bullet:has(.bullet-quote) {
+  align-self: stretch;
+  height: auto;
+  margin-top: 3px;
+  margin-bottom: 3px;
+}
+
+.bullet-quote {
+  @apply block h-full rounded-full bg-(--quote-bar);
+  width: 3px;
+  transition:
+    background-color 0.15s ease,
+    height 0.15s ease;
+}
+
+.bullet:hover .bullet-quote {
+  @apply bg-primary-ink;
+}
+
+/* Wherever the ring shows (hover, or collapsed with hidden children), the bar
+   pulls in from both ends so the ring pads it vertically as well as sideways.
+   The button keeps its size, so the hit area does not change. */
+.bullet:hover .bullet-quote,
+.bullet-quote[data-has-children="true"][data-collapsed="true"] {
+  height: calc(100% - 10px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bullet-quote {
+    transition: none;
+  }
+}
+
+/*
+ * Inactive bullet dim. When a bullet in the outline holds focus, every OTHER
+ * row's dot is dimmed (lighter/muted color) so the active/focused bullet stands
+ * out clearly. Pure CSS. Row hover restores strength.
+ */
+.outline-list:focus-within .outline-row:not(:focus-within) .bullet-dot {
+  @apply bg-muted-foreground/50;
+}
+
+.outline-list:focus-within .outline-row:not(:focus-within) .bullet-paragraph {
+  @apply text-muted-foreground/20;
+}
+
+.outline-list:focus-within .outline-row:focus-within .bullet-paragraph {
+  @apply text-muted-foreground/40;
+}
+
+.outline-list:focus-within .outline-row:not(:focus-within) .bullet-quote {
+  @apply bg-muted-foreground/30;
+}
+
+.outline-list:focus-within .outline-row:not(:focus-within) .bullet-number {
+  @apply text-muted-foreground/50;
+}
+
+.outline-list:focus-within
+  .outline-row:not(:focus-within)
+  .bullet:hover
+  .bullet-number {
+  @apply text-primary-ink;
+}
+
+/*
+ * Leading-decoration vertical alignment (ADR 0029). Every glyph/pill before the
+ * text aligns to the text's OPTICAL center (its x-height midline), NOT the
+ * geometric line-box center -- text mass sits low in the line box, so pure
+ * geometric centering reads ~2.5px high (measured, near-constant across sizes).
+ * The margin scales with half the line box (tracks the reading size); the
+ * subtracted K folds in each glyph's half-height AND that 2.5px optical nudge.
+ * Fixed-height glyphs (bullet/checkbox/provenance = 16px) share K=4.25px.
+ */
+.outline-row .bullet,
+.outline-row .checkbox,
+.outline-row [data-origin] {
+  margin-top: calc(var(--reading-line-box) / 2 - 4.25px);
+}
+
+/*
+ * Coarse-pointer touch targets (ADR 0029). On touch the bullet's tap target was
+ * only 16px wide (the touch-hitbox expands height to 44px but leaves width at
+ * the control's size). Grow the bullet box + dot toward a comfortable ~24px --
+ * a full 44px WIDTH would overlap the chevron and text caret (see the
+ * touch-hitbox note) -- and open the row's vertical rhythm so caret taps land.
+ */
+@media (pointer: coarse) {
+  .outline-row {
+    padding: 6px 4px;
+  }
+  .outline-row .bullet:has(.bullet-number) {
+    width: max(24px, var(--number-width));
+    margin-inline-start: calc(24px - max(24px, var(--number-width)));
+  }
+  .bullet {
+    width: 24px;
+    height: 24px;
+  }
+  /* The box grew 8px, so the dot centers 4px lower in it -- K rises 4.25->8.25
+     (desktop K + boxGrowth/2) to keep the dot on the SAME text optical center as
+     the fine-pointer bullet while still scaling (ADR 0029). MUST be
+     `.outline-row .bullet` (0,1,1), not `.bullet` (0,1,0): the base optical-align
+     rule is `.outline-row .bullet` and a media query adds NO specificity, so a
+     bare `.bullet` here silently loses to it and the coarse offset never lands. */
+  .outline-row .bullet {
+    margin-top: calc(var(--reading-line-box) / 2 - 8.25px);
+  }
+  .bullet-dot {
+    width: 9px;
+    height: 9px;
+  }
+  /* The dot grows with the box on coarse; the paragraph glyph grows with it too,
+     so the two kinds keep the same visual weight side by side. The box stays
+     centered, so the coarse K above still lands both glyphs on the text optical
+     center. */
+  .bullet-paragraph svg {
+    width: 17px;
+    height: 17px;
+  }
+
+  /*
+   * Checkbox: the same ~24px coarse target as the bullet, but bought with the
+   * touch-hitbox width opt-in rather than by growing the box (ADR 0029). The
+   * bullet's box is invisible -- only the 9px dot shows -- so growing it 16->24
+   * is free. The checkbox's box IS the drawn control, so growing it would fatten
+   * the glyph, shrink the check's fill ratio, shove the text over (it floats),
+   * and drag in the K 4.25->8.25 specificity trap. Inflating the ::before
+   * instead costs no layout and no pixels, and K stays 4.25 because the box
+   * never moves.
+   *
+   * 4px per side is the ceiling, and 6px is what it's measured against: the
+   * checkbox has 6px of clearance to the text and 6px to the bullet
+   * (`.outline-row`'s gap), so this keeps 2px of daylight on both sides and the
+   * boxes still can't overlap. Coarse-only on purpose -- on a fine pointer this
+   * arm would sit under a drag-select starting at the text's first character,
+   * which is the bug that removed the vendored ::after (checkbox.tsx).
+   *
+   * Deliberately NOT scoped to `.outline-row`: a task checkbox renders in THREE
+   * places, and all three want the target. Each reaches its 6px by a DIFFERENT
+   * declaration, so all three are load-bearing for the 4px arm -- shrink any one
+   * below 4px and that surface's checkbox starts eating the first character of
+   * its own text, which is this PR's bug in a new costume:
+   *   1. the list row      -- `.row-body > :not(.node-text)`'s `margin-right: 6px`
+   *   2. the zoomed title  -- the same `.row-body` float (its `me-1` loses to it)
+   *   3. quick-add (0049)  -- `.quick-add-editor`'s `gap: 0.375rem` (= 6px)
+   * Only the ::before moves, so each surface's own box size and nudge (the
+   * title's `size-5` + `mt-2`, quick-add's flex centring) are untouched.
+   */
+  .checkbox.touch-hitbox::before {
+    left: -4px;
+    right: -4px;
+  }
+
+  /*
+   * Right-edge chevron (ADR 0029, Workflowy-mobile parity). CSS-only relocation:
+   * the same absolutely-positioned .collapse-toggle flips from the left gutter
+   * (left:-15px) to the row's right edge. Because <li> is width:100% with depth
+   * as paddingInlineStart, right:0 lands on the viewport edge at every depth --
+   * one clean chevron column. Its touch-hitbox ::before (right:0, 44px, growing
+   * leftward) now grows into the reserved right padding below, not the margin.
+   *
+   * Vertical re-alignment: the chevron is `position:absolute`, so its `top` is
+   * measured from .outline-row's PADDING box, while the bullet and text are flex
+   * items measured from the CONTENT box. The desktop `top` (K=6.25) silently
+   * folds in the 2px desktop row padding; at coarse's 6px padding the chevron
+   * would ride 4px too HIGH relative to the content, so add that 4px back
+   * (6.25 - 4 = 2.25) to land it on the same optical center as the bullet/text.
+   * Ties to the coarse `.outline-row { padding: 6px 4px }` above -- keep in step.
+   */
+  .collapse-toggle {
+    left: auto;
+    right: 0;
+    top: calc(var(--reading-line-box) / 2 - 2.25px);
+  }
+
+  /*
+   * Accordion chevron direction (right edge only). In the left gutter the
+   * chevron reads as a tree twisty: collapsed points right, expanded rotates to
+   * down. On the RIGHT edge that right-pointing rest state reads wrong -- a
+   * right-side disclosure is an accordion, so it points DOWN when collapsed
+   * ("expand below") and UP when expanded ("collapse"): a 180deg flip, the
+   * Material/iOS expansion-panel convention. Base glyph is a ChevronRight, so
+   * collapsed = rotate(90) (down), expanded = rotate(-90) (up).
+   *
+   * Prefixed with `.outline-row` on purpose: the base rule
+   * `.collapse-toggle[data-collapsed="false"] svg` is (0,2,1) and a media query
+   * adds NO specificity, so a bare `.collapse-toggle svg` here would lose to it
+   * for expanded rows and the flip never lands -- the same trap as the coarse
+   * bullet margin above. `.outline-row .collapse-toggle svg` is (0,2,1) and the
+   * expanded override (0,3,1) both out-rank it.
+   */
+  .outline-row .collapse-toggle svg {
+    transform: rotate(90deg);
+  }
+  .outline-row .collapse-toggle[data-collapsed="false"] svg {
+    transform: rotate(-90deg);
+  }
+
+  /*
+   * Reserve the chevron column for the trailing decoration zone (ADR 0031 x
+   * ADR 0029). On coarse the chevron flips to `right:0` and is `position:
+   * absolute` (out of the flex flow), so `.node-deco` -- which hugs the row's
+   * trailing edge via `margin-inline-start:auto` -- would otherwise extend the
+   * full content width and render a decoration directly UNDER the chevron. Any
+   * trailing decoration on a COLLAPSED row always co-occurs with the chevron
+   * (a collapsed row has children), so push the zone in by the 16px chevron box
+   * + a gap so the decoration sits just left of it.
+   * Desktop keeps the chevron in the left gutter, so no reservation is needed
+   * there.
+   */
+  .node-deco {
+    margin-inline-end: 24px;
+  }
+
+  /*
+   * A childless row still renders an EMPTY .collapse-toggle button whose 44px
+   * hitbox would otherwise sit at the right edge and swallow taps meant for
+   * tap-to-edit (a childless collapse is a no-op). Remove it so those taps fall
+   * through to the row-body handler. `:not([data-has-children="true"])` also
+   * covers the broken-mirror leaf, which carries no data-has-children at all.
+   */
+  .collapse-toggle:not([data-has-children="true"]) {
+    display: none;
+  }
+
+  /*
+   * Reserve room so wrapped text never runs under the right-edge chevron. The
+   * text cell shrinks by the chevron's tap zone; a tap in this reserved band is
+   * dead space -> tap-to-edit, consistent with the rest of the row.
+   */
+  .row-body {
+    padding-inline-end: 44px;
+  }
+}
+
+.checkbox {
+  flex: 0 0 auto;
+  cursor: pointer;
+}
+
+/* The list row is `align-items: flex-start`, so the checkbox needs a nudge onto
+   the first text line. It rides the shared 16px-glyph rule above (bullet /
+   checkbox / provenance, K=4.25px) so it scales with the reading size; the
+   zoomed title is flex-centered and keeps its own `h2.zoomed-title .checkbox`
+   rule. Unlike the bullet, K does NOT change on coarse -- the checkbox's box
+   stays 16px there and only its touch-hitbox ::before widens. */
+
+/* The mirror badge is a 20px (`h-5`) bordered pill; K=5.25px aligns it to the
+   text optical center while scaling with the reading size (ADR 0029). */
+.outline-row .mirror-badge {
+  margin-top: calc(var(--reading-line-box) / 2 - 5.25px);
+}
+
+/* The daily date badge is a 20px (`h-5`) pill; K=6.25px aligns it to the text
+   optical center while scaling with the reading size (ADR 0029). The week badge
+   (issue #271) is the same pill, so it shares the nudge. */
+.outline-row [data-daily-date],
+.outline-row [data-daily-week] {
+  margin-top: calc(var(--reading-line-box) / 2 - 6.25px);
+}
+
+/* A zoomed paragraph's glyph (ADR 0045). Deliberately inert -- there is no
+   zoom target on the title -- and sized to the same 20px box as the title
+   checkbox so it inherits that control's proven optical nudge below. */
+.title-paragraph {
+  @apply flex size-5 items-center justify-center text-muted-foreground;
+  pointer-events: none;
+}
+
+h2.zoomed-title {
+  & button.mirror-badge {
+    @apply mt-2.5;
+  }
+
+  & .checkbox,
+  & .title-paragraph {
+    @apply mt-2;
+  }
+}
+
+/* Unlike every other before-text decoration, the title paragraph glyph does NOT float:
+   a paragraph is prose, so all of its lines must share one left edge rather
+   than the first one alone being shortened. It's a HANGING mark, outdented into
+   the left margin -- the wrapped-title-flows-under-its-icons behavior that float
+   buys (see `.row-body > :not(.node-text)`) is exactly wrong here.
+
+   NARROW (the base rule): the content column's padding collapses to 16px, which
+   is less than the mark's own 20px box -- a hanging mark would clip off the
+   viewport's left edge. So the mark sits INSIDE a gutter carved from the text
+   column, centered on the bullet column (8px lead + an 8px half-glyph). */
+h2.zoomed-title:has(.title-paragraph) {
+  position: relative;
+  padding-inline-start: 30px;
+}
+
+/* Overrides the float and the `position: relative` further down; needs the
+   `.row-body >` child selector to out-specify the latter. */
+h2.zoomed-title .row-body > .title-paragraph {
+  position: absolute;
+  inset-inline-start: 6px;
+  float: none;
+  margin-right: 0;
+}
+
+/* A zoomed quote's bar (ADR 0079), hung the same way as the paragraph mark:
+   inside a carved gutter on narrow screens, outdented into the margin on wide
+   ones. It spans the title's lines, not a fixed glyph box. */
+.title-quote {
+  @apply rounded-full bg-(--quote-bar);
+  width: 3px;
+  pointer-events: none;
+}
+
+h2.zoomed-title:has(.title-quote) {
+  position: relative;
+  padding-inline-start: 30px;
+}
+
+h2.zoomed-title .row-body > .title-quote {
+  position: absolute;
+  inset-inline-start: 14px;
+  top: 6px;
+  bottom: 6px;
+  float: none;
+  margin-right: 0;
+}
+
+/* WIDE: there's margin to hang into, so the mark outdents out of the text
+   column entirely. The title then keeps the 8px lead every zoomed title has --
+   its text sits on the same column as a bullet title's, and as the dot, the
+   child glyphs, and the `+` below it -- so changing the zoom root's kind never
+   shifts the title sideways. The 20px box ends flush with the title's border
+   box, making that 8px lead the gap between the mark and the text it marks.
+   Breakpoint: below `md` the padding is too tight for the outdent (measured). */
+@media (min-width: 768px) {
+  h2.zoomed-title:has(.title-paragraph) {
+    padding-inline-start: 8px;
+  }
+
+  h2.zoomed-title .row-body > .title-paragraph {
+    inset-inline-start: -20px;
+  }
+
+  h2.zoomed-title:has(.title-quote) {
+    padding-inline-start: 8px;
+  }
+
+  h2.zoomed-title .row-body > .title-quote {
+    inset-inline-start: -12px;
+  }
+}
+
+/*
+ * The row's text cell. A block (not flex) on purpose: the slot icons before the
+ * text FLOAT left inside it, so only the first line box is shortened and a
+ * wrapped line flows back UNDER the icons -- flex siblings would pin every
+ * wrapped line to the text column's left edge. Floats can't apply to flex
+ * items, hence this wrapper between the flex row and the icons. A flex item
+ * establishes its own formatting context, so the floats are contained without
+ * a clearfix.
+ */
+.row-body {
+  /* Explicit: the zoomed title renders this cell as a <span> (an h2 only
+     permits phrasing content), which would otherwise stay inline. */
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Every before-text decoration (checkbox, badges, lock, provenance mark)
+   floats; the 6px replaces the flex row's gap it no longer receives. */
+.row-body > :not(.node-text, .node-body-slot) {
+  float: left;
+  margin-right: 6px;
+}
+
+/*
+ * Reading size (ADR 0029). One lever scales the outline's body text and,
+ * proportionally, the zoomed page title. Driven by `data-text-size` on <html>
+ * (text-size-provider.tsx + the no-flash script in __root.tsx); absent = the
+ * 17px default baseline. The old default was the inherited 16px with tight
+ * ~1.25 leading -- 17px + 1.5 leading is the new floor for every user.
+ */
+:root {
+  --reading-font-size: 17px;
+  /* ADR 0069: minimum row width once indentation would otherwise squeeze it.
+     The viewport cap preserves the 16px mobile gutters. */
+  --outline-node-min-width: min(288px, calc(100vw - 2rem));
+  /* The first-line box height (font-size x line-height). Leading decorations
+     center on it via `calc(var(--reading-line-box) / 2 - Kpx)` so their vertical
+     offset tracks the reading size instead of a margin frozen at the old 16px
+     line -- K is each glyph's historical default nudge, so DEFAULT is unchanged
+     and only the scaling is added (ADR 0029). */
+  --reading-line-box: calc(var(--reading-font-size) * 1.5);
+}
+:root[data-text-size="small"] {
+  --reading-font-size: 15px;
+  --outline-node-min-width: min(256px, calc(100vw - 2rem));
+}
+:root[data-text-size="large"] {
+  --reading-font-size: 19px;
+  --outline-node-min-width: min(320px, calc(100vw - 2rem));
+}
+
+/* Reviewed plugin font override. Descendants include code and React token
+   chips with their own fonts; SVG icons and non-text bodies remain unchanged.
+   No DOM rewrite: source offsets, selection, copy, and spoilers stay intact. */
+:root[data-plugin-editor-font] .stream-entry-text,
+:root[data-plugin-editor-font] .node-text,
+:root[data-plugin-editor-font] .node-text :not(svg, svg *) {
+  font-family: var(--plugin-editor-font) !important;
+}
+
+.node-text {
+  /* Block, not the span default inline: an inline contentEditable only spans
+     its text, killing click-to-focus in the empty space after it. (In the
+     zoomed title -- still a flex <h2> -- this blockification is what the flex
+     item already got.) */
+  display: block;
+  flex: 1 1 auto;
+  min-height: 24px;
+  padding: 3px 0;
+  font-size: var(--reading-font-size);
+  line-height: 1.5;
+  outline: none;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/*
+ * Strikethrough marks a bullet that is itself completed (self-only). The
+ * row-level fade above handles dimming, so we don't also mute the text color
+ * here -- that would double-dim. Faded-by-ancestor children get no strikethrough.
+ */
+.node-text[data-completed="true"] {
+  @apply line-through;
+}
+
+/*
+ * Empty-bullet caret placement. `.node-text` is a block, and any before-text
+ * decoration (the todo checkbox, daily/provenance badges) floats left ahead of
+ * it inside `.row-body`. For a NON-empty node the first line is shortened by the
+ * float, so text sits after the decoration; but an EMPTY editable's caret is
+ * drawn at the element's own content origin (x=0), which lands BEFORE the float
+ * -- a pseudo-element can't move it, since the caret only tracks editable
+ * content. Giving the empty span its own block formatting context (`flow-root`)
+ * places its border box BESIDE the float (a BFC can't overlap a float's margin
+ * box), so its content origin -- and the caret -- sits after the checkbox while
+ * the span still fills the remaining row width (click target intact). Reverts to
+ * a plain block the instant a character is typed, leaving the multiline
+ * wrap-under-icons behavior on real text untouched. The ::before keeps the empty
+ * line's box height so the caret renders at full height.
+ */
+.node-text:empty {
+  display: flow-root;
+}
+
+.node-text:empty::before {
+  content: "";
+  display: inline-block;
+}
+
+/* Quick-add has no bullet column, so a quote draws its bar on the text itself
+   (ADR 0079). The marker renders as a folded atom or, near the caret, as
+   revealed `.quote-marker-reveal` text; either one leads the line. */
+.quick-add-editor .node-text:has(> .quote-marker, > .quote-marker-reveal) {
+  padding-inline-start: 12px;
+  box-shadow: inset 3px 0 0 var(--quote-bar);
+}
+
+/* Quick-add mini-editor (ADR 0049): show its placeholder while the capture is
+   empty. Scoped to the overlay so the outline's empty bullets stay blank. The
+   contentEditable's own `data-placeholder` supplies the text. */
+.quick-add-editor .node-text:empty::before {
+  content: attr(data-placeholder);
+  color: var(--muted-foreground);
+  pointer-events: none;
+}
+
+/* Once BORN, the node's before-text slots (Seam F -- the todos checkbox) render
+   inline ahead of the text, mirroring the list row / zoomed title. Lay the
+   surface out as a flex row so the checkbox sits beside the text and the
+   contentEditable takes the remaining width (ADR 0049 inline-decoration flow).
+   The 6px gap is load-bearing, not just rhythm: it's the clearance the coarse
+   checkbox tap target's 4px arm is sized against (ADR 0029 -- see the
+   `.checkbox.touch-hitbox::before` note). Below 4px the checkbox starts eating
+   clicks meant for the capture text. Keep it in step with the list row's 6px. */
+.quick-add-editor {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.quick-add-editor .node-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* --- Drag to reorder (ADR 0010) --- */
+
+/* While a drag is live: a grab cursor everywhere, and no accidental text
+   selection as the pointer sweeps across rows. */
+body.dragging-active {
+  cursor: grabbing;
+  user-select: none;
+}
+
+body.dragging-active * {
+  cursor: grabbing !important;
+}
+
+/* The grabbed row sits in place, dimmed; its subtree hides so we carry one
+   compact row. Both are visual-only and removed on drop (no data change). */
+.outline-row.drag-source {
+  @apply bg-card;
+
+  & > * {
+    @apply opacity-30;
+  }
+}
+
+/* The floating label that follows the pointer. */
+.drag-pill {
+  position: fixed;
+  z-index: 50;
+  pointer-events: none;
+  max-width: 320px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  background: var(--popover);
+  color: var(--popover-foreground);
+  border: 1px solid var(--border);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 18%);
+}
+
+/* The drop line. Its left edge is indented to the target depth, so the indent
+   itself is the depth feedback. A dot at the left marks the insertion point. */
+.drag-indicator {
+  @apply fixed h-1.5 w-full rounded-full;
+  z-index: 50;
+  pointer-events: none;
+  margin-top: -2px;
+  background: var(--primary);
+}
+
+.outline-empty {
+  @apply text-muted-foreground;
+  padding: 24px 4px;
+  font-size: 13px;
+}
+
+/*
+ * Loading spinner + first-load reveal. Kills the first-render flash where the
+ * outline painted zero rows and then jumped to the full tree the instant sync
+ * landed. See OutlineLoading.tsx and useSyncReady (collection.ts).
+ *
+ * The spinner wrapper fades in on a DELAY: for the ~140ms before it, animation-
+ * fill-mode `both` holds the `from` frame (opacity 0), so a fast snapshot (the
+ * common case) swaps to real content before the spinner is ever visible -- no
+ * spinner flash. Only a genuinely slow load reveals it.
+ */
+.outline-loading {
+  display: flex;
+  justify-content: center;
+  padding-top: 44px;
+  animation: loading-appear 200ms ease-out 140ms both;
+}
+
+@keyframes loading-appear {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.outline-spinner {
+  width: 22px;
+  height: 22px;
+  border: 2.5px solid var(--muted-foreground);
+  /* One transparent edge is what reads as a spinner rather than a ring. */
+  border-right-color: transparent;
+  border-radius: 50%;
+  opacity: 0.5;
+  animation: outline-spin 0.65s linear infinite;
+}
+
+@keyframes outline-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/*
+ * The real content's one-shot entrance, applied ONLY when it directly replaces a
+ * skeleton (revealOnLoad in OutlineEditor) -- never on a zoom, which owns its own
+ * morph. It runs on the wrapper, so it's a single container fade, never per row:
+ * zero cost on the virtualized keystroke path.
+ */
+.outline-reveal {
+  animation: outline-reveal 260ms cubic-bezier(0.2, 0, 0, 1) both;
+}
+
+@keyframes outline-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/*
+ * Reduced motion: keep the spinner's DELAY (so a fast load still shows nothing,
+ * no flash) but drop the fade and the spin -- a full ring gently pulsing opacity
+ * instead of rotating -- and make the reveal instant.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .outline-loading {
+    animation-duration: 1ms;
+  }
+
+  .outline-spinner {
+    border-right-color: var(--muted-foreground);
+    animation: outline-spinner-pulse 1.2s ease-in-out infinite;
+  }
+
+  @keyframes outline-spinner-pulse {
+    0%,
+    100% {
+      opacity: 0.5;
+    }
+    50% {
+      opacity: 0.15;
+    }
+  }
+
+  .outline-reveal {
+    animation: none;
+  }
+}
+
+.add-top {
+  margin-top: 16px;
+  background: transparent;
+  border: 1px dashed var(--bullet);
+  @apply text-muted-foreground;
+  padding: 8px;
+  border-radius: 99px;
+  cursor: pointer;
+}
+
+.add-top:hover {
+  @apply border-accent text-accent;
+}
+
+/* --- Zoom view --- */
+
+.breadcrumb {
+  @apply text-muted-foreground;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  min-width: 0;
+  /* A glanceable trail, never a scroll surface. Labels share the available
+     space and ellipsize; Home, separators, and the ancestor menu stay fixed. */
+  overflow: clip;
+}
+
+.breadcrumb .crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+/* Preserve the top-level context rather than shrinking a short name such as
+   Daily to only an ellipsis when later labels are long. */
+.breadcrumb > .crumb:first-of-type {
+  flex-shrink: 0;
+}
+
+.breadcrumb .sep {
+  color: var(--bullet);
+  flex: 0 0 auto;
+}
+
+.breadcrumb a,
+.breadcrumb .crumb-link {
+  @apply text-muted-foreground;
+  text-decoration: none;
+  /* Cap each crumb so one long title can't dominate; the `42vw` clamp keeps a
+     single crumb from eating a narrow viewport, while desktop keeps the 220px. */
+  max-width: min(220px, 42vw);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Breadcrumb items are buttons (so we can drive the zoom-out morph), styled
+   to read as links. */
+.breadcrumb .crumb-link {
+  display: inline-block;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+  vertical-align: bottom;
+}
+
+.breadcrumb a:hover,
+.breadcrumb .crumb-link:hover {
+  @apply text-primary-ink underline;
+}
+
+/* Keep Home reachable even when every label needs truncation. */
+.breadcrumb > button {
+  flex: 0 0 auto;
+}
+
+.breadcrumb .crumb-collapsed {
+  flex: 0 0 auto;
+}
+
+/* The "…" control: a small pill that reads as the collapsed middle. */
+.breadcrumb .crumb-ellipsis {
+  @apply inline-flex bg-secondary text-muted-foreground;
+  align-items: center;
+  justify-content: center;
+  padding: 1px 5px;
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+  line-height: 0;
+}
+
+.breadcrumb .crumb-ellipsis:hover {
+  @apply text-primary-ink;
+}
+
+/* The hidden-ancestors panel is now the shared Base UI dropdown menu (portaled
+   to the body), so the old CSS-positioned .crumb-dropdown rules are gone -- a
+   positioned panel would be clipped by the breadcrumb's horizontal overflow. */
+
+.zoomed-title {
+  /* Start the title on the same axis as the icon column below and above it: the
+     bullet box, the new-bullet `+`, and the breadcrumb Home glyph all have their
+     left edge 8px into the content column (a 32px icon button, or `.outline-row`'s
+     8px lead padding, around a 16px glyph). Keep in step with that padding. */
+  padding-inline-start: 8px;
+  font-weight: 600;
+  /* Still flex, but the single item is now the .row-body cell (mirroring
+     .outline-row): the leading decorations float inside it, so a long wrapped
+     title flows back under its icons instead of staying in a narrow column. */
+  display: flex;
+  align-items: start;
+  gap: 4px;
+}
+
+.zoomed-title-text {
+  /* Scales with the reading-size lever (ADR 0029). 1.4x the body size keeps the
+     title ~24px at the default (17px) -- its historical value -- while tracking
+     Small/Large so the title never dwarfs or drowns in the body text. */
+  font-size: calc(var(--reading-font-size) * 1.4);
+  line-height: 1.3;
+  /* Inherits `display: block` from .node-text -- deliberately NOT the old
+     inline-block: an atomic inline-block box can't flow line-by-line around
+     the floated icons, which would pin a wrapped title to the text column.
+     Block also matches the list row's morph endpoint (its .node-text is a
+     full-width block too), so the zoom morph geometry stays consistent. The
+     morph name itself is applied dynamically (.vt-morph) to whichever node
+     is the zoom pivot, so it works for both zoom-in and zoom-out. */
+}
+
+/* A completed zoom root shows full completed styling: line-through (from the
+   shared .node-text rule) plus the fade. The title is an <h2>, not an
+   .outline-row, so it needs its own fade. See ADR 0002 decision 6. */
+.zoomed-title-text[data-completed="true"] {
+  opacity: 0.4;
+}
+
+/* The zoomed pivot's `.node-text` carries an inline `view-transition-name`
+   (the morph target) while it's the zoom root, which makes it its own stacking
+   context -- lifting the full-width title box above the floated before-text
+   decorations, so a click over the checkbox lands on the contentEditable title
+   instead. Float only shortens the text's LINE boxes, not the block box behind
+   them (see `.row-body > :not(.node-text)`). Positioning the decorations at
+   z-index 1 paints them back above the stacking-context title so the checkbox
+   is clickable again. Title-only: the list row's `.node-text` has no
+   view-transition-name, so its float already wins the hit-test. */
+.zoomed-title .row-body > :not(.node-text) {
+  position: relative;
+  z-index: 1;
+}
+
+/* Keep the row's content column and gap, with the title's larger typography
+   for both the number and its text. The marker never floats into wrapped text. */
+h2.zoomed-title:has(.title-number) {
+  position: relative;
+  padding-inline-start: 30px;
+}
+
+h2.zoomed-title .row-body > .title-number {
+  position: absolute;
+  inset-inline-end: calc(100% - 24px);
+  top: 3px;
+  float: none;
+  margin: 0;
+  padding-inline: 2px;
+  font-size: calc(var(--reading-font-size) * 1.4);
+  line-height: 1.3;
+  text-align: end;
+}
+
+@media (pointer: coarse) {
+  h2.zoomed-title:has(.title-number) {
+    padding-inline-start: 34px;
+  }
+
+  h2.zoomed-title .row-body > .title-number {
+    inset-inline-end: calc(100% - 28px);
+  }
+}
+
+/* During a zoom, the pivot's text box wraps its text tightly so the title
+   and the list item morph cleanly into each other (no slide from a stretched
+   flex box). Scoped to the active zoom transition so the live layout reverts
+   the moment it ends. */
+:root:active-view-transition-type(zoom) .vt-morph {
+  flex-grow: 0;
+}
+
+/* Zoom morph timing. The group drives position + size; the old/new images
+   crossfade across it, so the pivot text grows/shrinks between bullet and
+   title. */
+::view-transition-group(zoom-target) {
+  animation-duration: 0.2s;
+  animation-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* The rest-of-page crossfade settles with the zoom morph. */
+::view-transition-group(root) {
+  animation-duration: 0.2s;
+}
+
+/* Only the selection pill moves across a day switch; sticky chrome must not
+   inherit the outgoing page's vertical scroll or scale (ADR 0054). */
+.week-calendar-selection-slide {
+  animation: week-calendar-selection-slide 0.2s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+@keyframes week-calendar-selection-slide {
+  from {
+    transform: translateX(var(--week-calendar-selection-x));
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
+  }
+
+  .week-calendar-selection-slide {
+    animation: none !important;
+  }
+
+  .collapse-toggle svg {
+    transition: none !important;
+  }
+
+  /* Shared overlays must snap on entry AND exit, including caller overrides.
+     React Aria's mobile sheets keep their own reduced-motion handling. */
+  [data-slot="dialog-overlay"],
+  [data-slot="dialog-content"],
+  [data-slot="dropdown-menu-content"],
+  [data-slot="dropdown-menu-sub-content"],
+  [data-slot="popover-content"],
+  [data-slot="tooltip-content"],
+  [data-slot="hover-card-content"],
+  [data-slot="sheet-overlay"],
+  [data-slot="sheet-content"] {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/*
+ * Comfortable touch target WITHOUT width inflation. The gutter controls
+ * (chevron, bullet, checkbox) sit too close to each other -- and to the text
+ * -- to each claim 44px of WIDTH, so two centered 44px boxes used to overlap
+ * and fight over the same taps (later-painted element won, so chevron taps
+ * zoomed). We expand the target VERTICALLY only; each box stays as wide as its
+ * control, so the boxes no longer physically overlap and there's no z-index
+ * race. Width-expansion is opt-in per control where there's room (see the
+ * chevron override below).
+ */
+@utility touch-hitbox {
+  position: relative;
+
+  &:before {
+    content: "";
+    position: absolute;
+    display: block;
+    top: 50%;
+    left: 0;
+    right: 0;
+    transform: translateY(-50%);
+    height: 100%;
+    min-height: 44px;
+  }
+}
+
+/* Rich links (ADR 0005, bracket reveal). A link FOLDS to a clean <a> with a
+   leading site favicon and a trailing edit pencil when the caret isn't on it;
+   when the caret is within/adjacent, the BRACKETS appear around the editable
+   label but the URL stays folded behind a `(✎)` chip -- the raw url never
+   expands into the line. At most one link reveals at a time (under caret). */
+.node-link {
+  color: var(--link);
+  text-decoration-color: color-mix(in oklab, var(--link) 50%, transparent);
+}
+
+.node-link:hover {
+  text-decoration-color: currentColor;
+}
+
+/* Revealed-link decoration: faint `[]` punctuation (most-dimmed) around a
+   normal-color label -- mimicking Obsidian Live Preview, minus the raw url.
+   The label carries no underline (raw editing mode); only the folded <a>
+   underlines. */
+.md-punct {
+  color: var(--muted-foreground);
+  opacity: 0.6;
+}
+
+.link-label {
+  color: var(--link);
+}
+
+/* The site favicon, leading a folded link (Google s2/favicons). It sits inside the <a>
+   but contributes no textContent, so caret math is unaffected. A fixed em box
+   keeps it aligned with the text regardless of the source icon's size. */
+.link-start {
+  /* Keep the favicon with the first character, not an entire unbreakable URL. */
+  white-space: nowrap;
+}
+
+.link-favicon {
+  display: inline-block;
+  width: 0.95em;
+  height: 0.95em;
+  margin-right: 0.25em;
+  vertical-align: -0.15em;
+  border-radius: 2px;
+  object-fit: contain;
+  user-select: none;
+  @apply bg-muted;
+}
+
+/* Title-unfurl loading state (ADR 0016). While a just-pasted bare-url link's
+   title is being fetched, the <a> wears `.link-unfurling`: the favicon slot
+   becomes a spinner (same em box, so nothing shifts), the url label stays and
+   the link stays clickable. A transient class applied imperatively by the links
+   plugin, like flash-node / rejectRow. */
+.node-link.link-unfurling .link-favicon {
+  display: none;
+}
+
+.node-link.link-unfurling .link-start::before {
+  content: "";
+  display: inline-block;
+  width: 0.95em;
+  height: 0.95em;
+  margin-right: 0.25em;
+  vertical-align: -0.15em;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  opacity: 0.6;
+  animation: link-unfurl-spin 0.6s linear infinite;
+}
+
+@keyframes link-unfurl-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Reduced motion: hold a static ring instead of spinning. */
+@media (prefers-reduced-motion: reduce) {
+  .node-link.link-unfurling .link-start::before {
+    animation: none;
+  }
+}
+
+/* The edit affordance (ADR 0005, bracket reveal): a small pencil painted with
+   the current text color via an SVG mask (Hugeicons `PencilEdit02Icon`, MIT). It trails the label
+   beside a folded <a> and fills the revealed link's `(✎)` button. The icon is
+   text-free, so source/caret math is unaffected. */
+.link-edit-icon {
+  display: inline-block;
+  width: 0.7em;
+  height: 0.7em;
+  margin-left: 0.12em;
+  vertical-align: -0.02em;
+  background-color: currentColor;
+  opacity: 0.55;
+  cursor: pointer;
+  user-select: none;
+  -webkit-mask: var(--link-edit-icon) no-repeat center / contain;
+  mask: var(--link-edit-icon) no-repeat center / contain;
+}
+
+.node-link:hover .link-edit-icon,
+.link-edit-button:hover .link-edit-icon,
+.link-url-chip:hover .link-edit-icon {
+  opacity: 1;
+}
+
+.link-edit-button,
+.link-url-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.4em;
+  min-height: 1.4em;
+  margin-left: 0.12em;
+  border-radius: var(--radius-sm);
+  vertical-align: middle;
+  color: var(--muted-foreground);
+}
+
+.link-with-editor {
+  --link-edit-size: 1.4em;
+}
+
+.link-with-editor > .node-link {
+  /* Reserve the pencil on the last line of the anchor, then place the sibling
+     button into that space. Both stay inline without nesting two controls or
+     giving the pencil a separate line-breaking opportunity. */
+  padding-inline-end: calc(var(--link-edit-size) + 0.12em);
+}
+
+.link-with-editor:has(> .node-link) > .link-edit-button {
+  min-width: var(--link-edit-size);
+  margin-left: calc(-1 * var(--link-edit-size));
+}
+
+.link-edit-button .link-edit-icon {
+  margin-left: 0;
+}
+
+.link-edit-button:focus-visible,
+.link-url-chip:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+@media (pointer: coarse) {
+  .link-with-editor {
+    --link-edit-size: max(24px, 1.4em);
+  }
+
+  .link-edit-button,
+  .link-url-chip {
+    /* Like the bullet, keep a compact horizontal target beside editable text.
+       Enlarge only its touch height, not the line box or the gap after a link. */
+    min-width: 24px;
+  }
+
+  .link-edit-button::before,
+  .link-url-chip::before {
+    content: "";
+    position: absolute;
+    inset-inline: 0;
+    height: max(100%, 44px);
+    top: 50%;
+    transform: translateY(-50%);
+  }
+}
+
+/* The revealed link's folded URL: the pencil stands in for the bare url
+   (carried in its data-src); the parens around it are real `.md-punct` text,
+   so the caret walks through them. Link-colored like the folded <a>, so it
+   reads as "the link half". */
+.link-url-chip {
+  cursor: pointer;
+  user-select: none;
+  color: var(--link);
+  /* The literal parentheses already frame this inline control. Do not carry
+     the folded button's horizontal padding into `(✎)` or enlarge its line. */
+  min-width: 0;
+  min-height: 0;
+  margin-left: 0;
+  vertical-align: -0.02em;
+}
+
+.link-url-chip .link-edit-icon {
+  margin-left: 0;
+}
+
+dotflowy-widget[data-bible-ref][data-atom-selected] > span {
+  border-color: var(--atom-ring);
+  background: var(--atom-fill);
+  color: var(--atom-ink);
+  box-shadow:
+    0 0 0 1px var(--atom-ring),
+    0 0 0 4px color-mix(in oklab, var(--atom-ring) 20%, transparent);
+}
+
+:root {
+  --link-edit-icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M16.4249 4.60509L17.4149 3.6151C18.2351 2.79497 19.5648 2.79497 20.3849 3.6151C21.205 4.43524 21.205 5.76493 20.3849 6.58507L19.3949 7.57506M16.4249 4.60509L9.76558 11.2644C9.25807 11.772 8.89804 12.4078 8.72397 13.1041L8 16L10.8959 15.276C11.5922 15.102 12.228 14.7419 12.7356 14.2344L19.3949 7.57506M16.4249 4.60509L19.3949 7.57506"/><path d="M18.9999 13.5C18.9999 16.7875 18.9999 18.4312 18.092 19.5376C17.9258 19.7401 17.7401 19.9258 17.5375 20.092C16.4312 21 14.7874 21 11.4999 21H11C7.22876 21 5.34316 21 4.17159 19.8284C3.00003 18.6569 3 16.7712 3 13V12.5C3 9.21252 3 7.56879 3.90794 6.46244C4.07417 6.2599 4.2599 6.07417 4.46244 5.90794C5.56879 5 7.21252 5 10.5 5"/></svg>');
+}
+
+/* The highlight color affordance (ADR 0035, Bear-style): a small highlighter
+   pen painted with the current text color via an SVG mask (Hugeicons
+   `HighlighterIcon`, MIT), leading a REVEALED run right after the opening `==`. A
+   text-free span like the link pencil, so source/caret math is unaffected.
+   Clicking it opens the highlight color menu (Seam B). */
+.highlight-pen-icon {
+  display: inline-block;
+  width: 0.8em;
+  height: 0.8em;
+  margin-right: 0.15em;
+  vertical-align: -0.05em;
+  background-color: currentColor;
+  opacity: 0.55;
+  cursor: pointer;
+  user-select: none;
+  -webkit-mask: var(--highlight-pen-icon) no-repeat center / contain;
+  mask: var(--highlight-pen-icon) no-repeat center / contain;
+}
+
+[data-highlight-reveal]:hover .highlight-pen-icon {
+  opacity: 1;
+}
+
+/* A reviewed block slot, outside editable text and the inline decoration budget. */
+.node-body-slot {
+  clear: both;
+  width: 100%;
+  max-width: 40rem;
+  font-size: 1rem;
+  font-weight: normal;
+  line-height: 1.5;
+}
+.node-body-slot:empty {
+  display: none;
+}
+.outline-canvas-viewport {
+  /* Row widths depend on this viewport, not on deeper children widening the
+     canvas. Inline containment leaves the editor's vertical sizing intact. */
+  container-type: inline-size;
+  width: calc(100% + 16px);
+  max-width: none;
+  margin-inline-start: -16px;
+  padding-inline-start: 16px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  touch-action: pan-x pan-y;
+}
+.outline-canvas-viewport::-webkit-scrollbar {
+  display: none;
+}
+.outline-canvas {
+  min-width: 100%;
+}
+.embed-frame {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  border-radius: var(--radius);
+  background: var(--muted);
+}
+
+/* X's official widget cannot shrink below 250px. Widen its owning content
+   cell rather than clipping or scaling the provider. The outline canvas
+   contains any overflow and keeps the page chrome fixed. */
+.outline-row:has([data-x-embed]) {
+  /* Content + bullet + gap + row padding. Do not use min-content: the
+     provider resizes its iframe to its host and would feed back into sizing. */
+  min-width: calc(250px + 16px + 6px + 12px);
+}
+
+.row-body:has([data-x-embed]) {
+  min-width: 250px;
+}
+
+@media (pointer: coarse) {
+  .outline-row:has([data-x-embed]) {
+    min-width: calc(250px + 44px + 24px + 6px + 8px);
+  }
+
+  .row-body:has([data-x-embed]) {
+    /* Include the existing right-edge chevron reserve in the border box. */
+    min-width: calc(250px + 44px);
+  }
+}
+
+:root {
+  --highlight-pen-icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6.6777 16.2071L8.79289 18.3223M6.6777 16.2071L2.5 20.5H6.5L8.79289 18.3223M6.6777 16.2071C6.28717 15.8166 6.29534 15.1872 6.63537 14.752C7.42742 13.7383 7.71531 12.8216 7.79924 12.1382C7.89158 11.3863 8.07366 10.5734 8.60933 10.0377L9.50122 9.14828M8.79289 18.3223C9.18342 18.7128 9.81278 18.7047 10.248 18.3646C11.2617 17.5726 12.1784 17.2847 12.8618 17.2008C13.6137 17.1084 14.4266 16.9263 14.9623 16.3907L15.8517 15.4988M15.8517 15.4988L9.50122 9.14828M15.8517 15.4988C16.2422 15.8893 16.8754 15.8893 17.2659 15.4988L21.5 11.2647M9.50122 9.14828C9.1107 8.75776 9.1107 8.12459 9.50122 7.73407L13.7353 3.5"/></svg>');
+}
+
+/* A nonmodal keyboard accessory. Its fixed frame never reflows the outline. */
+.typing-suggestions-viewport {
+  position: fixed;
+  left: env(safe-area-inset-left);
+  right: env(safe-area-inset-right);
+  z-index: 50;
+  display: flex;
+  align-items: flex-end;
+  pointer-events: none;
+}
+
+.typing-suggestions {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--popover);
+  color: var(--popover-foreground);
+  border-top: 1px solid var(--border);
+  box-shadow: 0 -4px 16px rgb(0 0 0 / 6%);
+  pointer-events: auto;
+}
+
+/* Fade the results over the solid panel, not the panel into the outline. */
+.typing-suggestions-scroll {
+  --scroll-fade-size: 16px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scroll-padding-block: calc(4px + var(--scroll-fade-size));
+}
+
+.typing-suggestions [role="option"] {
+  scroll-margin-block: 0;
+}
+
+body:has(.typing-suggestions) [data-mobile-bar] {
+  visibility: hidden;
+}
+
+/*
+ * View stream (ADR 0070): section chrome in the windowed list. A section title
+ * is the zoomed title in a list item; the space above it separates one day's
+ * page from the previous one.
+ */
+.stream-item[data-stream-item="title"],
+.stream-item[data-stream-item="placeholder"] {
+  padding-top: 28px;
+}
+
+.stream-item[data-stream-item="title"] .zoomed-title,
+.stream-title {
+  margin-bottom: 6px;
+}
+
+.stream-placeholder-text {
+  display: block;
+  padding: 3px 0;
+}
+
+.stream-badge {
+  float: left;
+  margin: 4px 8px 0 0;
+  border-radius: 9999px;
+  padding: 2px 10px;
+  font-size: calc(var(--reading-font-size) * 0.75);
+  font-weight: 500;
+  line-height: 1.4;
+  @apply border border-border text-muted-foreground;
+}
+
+.stream-entry .bullet-dot {
+  @apply bg-ink/25;
+}
+
+.stream-entry-text {
+  display: block;
+  flex: 1 1 auto;
+  min-height: 24px;
+  padding: 3px 0;
+  font-size: var(--reading-font-size);
+  line-height: 1.5;
+  outline: none;
+  white-space: pre-wrap;
+  word-break: break-word;
+  cursor: text;
+}
+
+.stream-entry-text:empty::before {
+  content: attr(data-placeholder);
+  @apply text-muted-foreground/70;
+}
+
+.stream-fold {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  border-block: 1px dashed var(--border);
+  padding: 10px 8px;
+  font-size: 14px;
+  text-align: start;
+  @apply text-muted-foreground;
+}
+
+.stream-fold:hover {
+  @apply text-foreground;
+}
+
+.stream-fold-mark {
+  width: 16px;
+  text-align: center;
+  letter-spacing: 1px;
+}

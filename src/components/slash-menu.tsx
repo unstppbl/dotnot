@@ -1,0 +1,245 @@
+import { AnimatePresence } from "motion/react";
+import { useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { createPortal } from "react-dom";
+
+import type { Node } from "../data/schema";
+import type { CommandSpec, PluginContext } from "../plugins/types";
+
+import { CORE_COMMANDS } from "../data/core-commands";
+import { useIsMobile } from "../hooks/use-mobile";
+import { usePluginChrome } from "../plugins/registry";
+import { caretOffset, caretPosition, wrap } from "./caret-menu-utils";
+import { decorate, readSource, setCaretOffset } from "./inline-code";
+import { SlashMenuList } from "./slash-menu-list";
+import { TypingSuggestions } from "./typing-suggestions";
+import { useClampedMenuPosition } from "./use-menu-position";
+
+/** The composed command list driving the `/` palette: plugin commands (Seam C,
+ *  array order), then the core's (`data/core-commands.ts`) -- so the contextual
+ *  type-change commands lead and the destination pickers trail, preserving the
+ *  pre-plugin palette order. Detection/filtering/keyboard/rendering stay generic. */
+function filterCommands(
+  node: Node,
+  query: string,
+  commands: CommandSpec[],
+  ctx: PluginContext,
+  commandFilter?: (spec: CommandSpec) => boolean,
+): CommandSpec[] {
+  const q = query.toLowerCase();
+  const all = [...commands, ...CORE_COMMANDS];
+  const base = commandFilter ? all.filter(commandFilter) : all;
+  const available = base.filter((c) => c.available(node, ctx));
+  if (!q) return available;
+  return available.filter(
+    (c) =>
+      c.label.toLowerCase().includes(q) ||
+      c.keywords.some((k) => k.includes(q)),
+  );
+}
+
+/** Open-menu state. `slashIndex` is the char offset of the triggering "/". */
+interface SlashState {
+  query: string;
+  /** Null when a read-only locked row opened the palette without inserting /. */
+  slashIndex: number | null;
+  activeIndex: number;
+  x: number;
+  y: number;
+}
+
+/**
+ * Drives the `/` command menu for a single bullet's contentEditable span.
+ *
+ * Returns input/keydown handlers the OutlineRow wires into its existing
+ * handlers, a `close` callback (for blur), `isOpen`, and the rendered menu
+ * element (portaled, so it's safe to drop anywhere in the JSX).
+ */
+export function useSlashMenu({
+  node,
+  ctx,
+  getEl,
+  onTextChange,
+  commandFilter,
+}: {
+  node: Node;
+  /** The PluginContext factory (read live values at event time), the same one
+   *  the bullet hands to the menu engine. A picked command runs with `ctx()`. */
+  ctx: () => PluginContext;
+  getEl: () => HTMLElement | null;
+  onTextChange: (text: string) => void;
+  /** Restrict the palette to a subset of commands (ADR 0049): the quick-add
+   *  mini-editor curates out the structural verbs (Move/Mirror/Delete/Send to
+   *  Today) so its text-authoring surface never relocates the capture. Omit for
+   *  the full outline palette. */
+  commandFilter?: (spec: CommandSpec) => boolean;
+}) {
+  const { commandSpecs } = usePluginChrome();
+  const [state, setState] = useState<SlashState | null>(null);
+  const mobile = useIsMobile();
+
+  const items = state
+    ? filterCommands(node, state.query, commandSpecs, ctx(), commandFilter)
+    : [];
+
+  // Keep the menu on screen: clamp the caret coords to the viewport (shift left
+  // near the right edge, flip above near the bottom). Re-measures on item count.
+  const menuPosition = useClampedMenuPosition(
+    state?.x ?? 0,
+    state?.y ?? 0,
+    items.length,
+  );
+
+  const close = () => setState(null);
+
+  const openWithoutInput = () => {
+    const el = getEl();
+    if (!el) return;
+    const pos = caretPosition(el);
+    setState({
+      query: "",
+      slashIndex: null,
+      activeIndex: 0,
+      x: pos.x,
+      y: pos.y,
+    });
+  };
+
+  // Re-evaluate the trigger after every input. Opens, updates, or closes.
+  const handleInput = () => {
+    const el = getEl();
+    if (!el) return;
+    const hit = detectSlash(el);
+    if (!hit) {
+      setState(null);
+      return;
+    }
+    const pos = caretPosition(el);
+    setState((prev) => ({
+      query: hit.query,
+      slashIndex: hit.slashIndex,
+      // Keep the highlight stable while typing unless the query changed.
+      activeIndex: prev && prev.query === hit.query ? prev.activeIndex : 0,
+      x: pos.x,
+      y: pos.y,
+    }));
+  };
+
+  const select = (index: number) => {
+    const el = getEl();
+    if (!el || !state) return;
+    const list = filterCommands(
+      node,
+      state.query,
+      commandSpecs,
+      ctx(),
+      commandFilter,
+    );
+    const item = list[index];
+    if (!item) {
+      setState(null);
+      return;
+    }
+    // Strip the "/query" the user typed, then run the command. Work in
+    // SOURCE space (readSource, not textContent) so a folded link elsewhere
+    // on the line keeps its url instead of flattening to its label.
+    if (state.slashIndex !== null) {
+      const text = readSource(el);
+      const end = state.slashIndex + 1 + state.query.length;
+      const newText = text.slice(0, state.slashIndex) + text.slice(end);
+      onTextChange(newText);
+      decorate(el, newText, state.slashIndex, false);
+      setCaretOffset(el, state.slashIndex);
+    }
+    setState(null);
+    item.run(node.id, ctx());
+  };
+
+  // Intercept navigation keys while open. Returns true if it consumed the
+  // event, so the caller skips its own Enter/Tab/Arrow handling.
+  const handleKeyDown = (e: ReactKeyboardEvent<HTMLElement>): boolean => {
+    if (!state) return false;
+    switch (e.key) {
+      case "ArrowDown":
+        e.preventDefault();
+        setState((s) =>
+          s ? { ...s, activeIndex: wrap(s.activeIndex + 1, items.length) } : s,
+        );
+        return true;
+      case "ArrowUp":
+        e.preventDefault();
+        setState((s) =>
+          s ? { ...s, activeIndex: wrap(s.activeIndex - 1, items.length) } : s,
+        );
+        return true;
+      case "Enter":
+      case "Tab":
+        e.preventDefault();
+        select(state.activeIndex);
+        return true;
+      case "Escape":
+        e.preventDefault();
+        e.stopPropagation();
+        setState(null);
+        return true;
+      default:
+        return false;
+    }
+  };
+
+  const menu = mobile ? (
+    <AnimatePresence>
+      {state && (
+        <TypingSuggestions getEditor={getEl} onDismiss={close}>
+          <SlashMenuList
+            items={items}
+            activeIndex={state.activeIndex}
+            inDock
+            onHover={(i) => setState((s) => (s ? { ...s, activeIndex: i } : s))}
+            onSelect={select}
+          />
+        </TypingSuggestions>
+      )}
+    </AnimatePresence>
+  ) : state ? (
+    createPortal(
+      <SlashMenuList
+        items={items}
+        activeIndex={state.activeIndex}
+        ref={menuPosition.ref}
+        style={menuPosition.style}
+        onHover={(i) => setState((s) => (s ? { ...s, activeIndex: i } : s))}
+        onSelect={select}
+      />,
+      document.body,
+    )
+  ) : null;
+
+  return {
+    handleInput,
+    handleKeyDown,
+    openWithoutInput,
+    close,
+    isOpen: !!state,
+    menu,
+  };
+}
+
+/**
+ * Inspect the text before the caret for an active "/" trigger. Triggers only
+ * when the "/" is at the start of the bullet or follows whitespace (so URLs
+ * like "a/b" don't fire), and the query after it has no whitespace.
+ */
+function detectSlash(
+  el: HTMLElement,
+): { query: string; slashIndex: number } | null {
+  const caret = caretOffset(el);
+  if (caret === null) return null;
+  const before = readSource(el).slice(0, caret);
+  const slashIndex = before.lastIndexOf("/");
+  if (slashIndex === -1) return null;
+  const prev = before[slashIndex - 1];
+  if (slashIndex > 0 && !/\s/.test(prev ?? "")) return null;
+  const query = before.slice(slashIndex + 1);
+  if (/\s/.test(query)) return null;
+  return { query, slashIndex };
+}

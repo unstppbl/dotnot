@@ -1,0 +1,574 @@
+import { useHotkeys, type UseHotkeyDefinition } from "@tanstack/react-hotkeys";
+import { useLayoutEffect, useState, type RefObject } from "react";
+
+import type { Node } from "../data/schema";
+import type { PluginContext } from "../plugins/types";
+import type { NodeCommands } from "./node-commands";
+
+import { selectSingle } from "../data/selection-state";
+import { getNodeOrdinal } from "../data/tree-store";
+import { dispatchClick, keymapSpecs } from "../plugins/registry";
+import {
+  decorate,
+  getCaretOffset,
+  getSelectedAtom,
+  getSelectionRange,
+  readSource,
+  selectAdjacentAtom,
+  setCaretOffset,
+} from "./inline-code";
+import { openInlineTargetAtCaret } from "./link-keymap";
+import { nodeZoomShortcuts } from "./node-zoom-shortcut";
+import {
+  exitEmptyQuoteOnEnter,
+  removeQuoteMarkerOnBackspace,
+} from "./quote-marker";
+
+interface BulletKeymapArgs {
+  node: Node;
+  // The INSTANCE id + its collapse state. Collapse is LOCAL to where the row
+  // sits (ADR 0022 field split), so Cmd+Up/Down toggle the INSTANCE, not the
+  // source. `node` is the CONTENT (slice 1b feeds a mirror row its source), so
+  // keying collapse off `node.id`/`node.collapsed` would expand/collapse the
+  // source instead -- exactly what the chevron (which uses `instance`) avoids.
+  // For a mirror-free row instanceId === node.id, so this is byte-identical.
+  instanceId: string;
+  instanceCollapsed: boolean;
+  textRef: RefObject<HTMLSpanElement | null>;
+  commands: NodeCommands;
+  pluginCtx: () => PluginContext;
+  hasChildren: boolean;
+  // While a "/" or "#" menu is open it owns Arrow/Enter/Tab/Esc, so the keymap
+  // disables itself. Disabled registrations bail before any preventDefault/
+  // stopPropagation, leaving the menu's own onKeyDown untouched.
+  enabled: boolean;
+}
+
+/**
+ * Outline keyboard shortcuts for ONE bullet's contentEditable. Most bind
+ * through `target: textRef`; Backspace binds directly below for iPhone Safari.
+ * Element scoping lets single keys fire from a contentEditable -- the manager
+ * only ignores input elements that aren't the registration's own target.
+ *
+ * Extracted from the row body so the body stays readable. Caret-conditional
+ * arrows opt out of the default
+ * preventDefault/stopPropagation and call them manually only when they actually
+ * act, so normal caret movement still works. Backspace uses the direct native
+ * listener below because iPhone Safari can beat the focus-gated registration.
+ */
+/** Stable empty keymap for unfocused bullets, so an unfocused re-render never
+ *  hands `useHotkeys` a fresh array (which would re-run its registration work). */
+const EMPTY_KEYMAP: never[] = [];
+
+export function useBulletKeymap({
+  node,
+  instanceId,
+  instanceCollapsed,
+  textRef,
+  commands,
+  pluginCtx,
+  hasChildren,
+  enabled,
+}: BulletKeymapArgs) {
+  // Only the FOCUSED bullet needs a registered keymap: every definition is
+  // `target: textRef`, so it can only fire while this bullet holds the caret.
+  // Registering ~18 hotkeys for EVERY visible bullet made a zoom -- which
+  // remounts the whole windowed list -- burn ~130ms in @tanstack/react-hotkeys;
+  // gating registration on focus cuts that to one bullet's worth. The no-caret
+  // selection keys live on a window-level listener (selection-mode.tsx), so
+  // multi-select is unaffected when the bullet blurs.
+  //
+  // LAYOUT effect, not passive: a freshly-inserted bullet is focused in
+  // OutlineRow's mount `useLayoutEffect` (the central FocusPass for already-
+  // mounted rows). `useHotkeys` registers in a passive effect, so if this flip
+  // ran passively too, `setFocused(true)` would land AFTER the first paint and
+  // force a SECOND passive pass before the full keymap registered -- a paint
+  // cycle where the just-focused bullet has no keymap (a rapid second Enter
+  // could no-op). Flipping in the layout phase re-renders synchronously before
+  // paint, so the keymap registers in the first passive pass -- matching the
+  // pre-gating (always-on) timing.
+  const [focused, setFocused] = useState(false);
+  useLayoutEffect(() => {
+    const el = textRef.current;
+    if (!el) return;
+    // Sync now: a freshly inserted bullet is focused imperatively right after
+    // mount, before a 'focus' event would reach this listener.
+    setFocused(document.activeElement === el);
+    const onFocus = () => setFocused(true);
+    const onBlur = () => setFocused(false);
+    el.addEventListener("focus", onFocus);
+    el.addEventListener("blur", onBlur);
+    return () => {
+      el.removeEventListener("focus", onFocus);
+      el.removeEventListener("blur", onBlur);
+    };
+  }, [textRef]);
+
+  // Let the feedback gate invoke the SAME node action before Amp consumes
+  // Mod+. in window capture. Keep the ordinary keymap for sessions without Amp.
+  useLayoutEffect(() => {
+    const el = textRef.current;
+    if (!el || !enabled) return;
+    nodeZoomShortcuts.set(el, () => commands.onZoom(node.id));
+    return () => {
+      nodeZoomShortcuts.delete(el);
+    };
+  }, [textRef, enabled, commands, node.id]);
+
+  // Software keyboards can send either Backspace or beforeinput deletion
+  // intent. The iPhone trace has no beforeinput on an empty contentEditable.
+  // Bind the whole Backspace-at-start decision directly, without waiting for
+  // focus-gated hotkeys to register: task/bullet demotion, empty-node deletion,
+  // and non-empty joining must all survive that Safari event sequence.
+  useLayoutEffect(() => {
+    const el = textRef.current;
+    if (!el || !enabled) return;
+    const handleBackspace = (e: Event) => {
+      // A quote's marker goes first, ahead of task demotion and the join, so
+      // the first Backspace at or inside `> ` unquotes the row (ADR 0079).
+      if (
+        removeQuoteMarkerOnBackspace(el, e, (text) =>
+          commands.onTextChange(node.id, text),
+        )
+      )
+        return;
+      if (
+        e.defaultPrevented ||
+        !e.cancelable ||
+        !el.isContentEditable ||
+        document.activeElement !== el ||
+        !isCaretAtStart(el)
+      )
+        return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (node.kind === "numbered") {
+        const prefix = `${getNodeOrdinal(instanceId)}.`;
+        const text = prefix + readSource(el);
+        commands.onSetKind(node.id, "paragraph", text);
+        decorate(el, text, prefix.length, false);
+        setCaretOffset(el, prefix.length);
+      } else if (node.kind === null) {
+        // Delete only the final Markdown marker character: `]` from a task,
+        // or the space from `- `. The rest becomes editable source text.
+        const prefix = node.isTask ? (node.completed ? "[x" : "[ ") : "-";
+        const text = prefix + readSource(el);
+        commands.onSetKind(node.id, node.isTask ? null : "paragraph", text);
+        decorate(el, text, prefix.length, false);
+        setCaretOffset(el, prefix.length);
+      } else if (readSource(el) === "") {
+        // Source, not textContent: a folded token can render as an empty atom.
+        // INSTANCE, not content: mirrors pass the source as `node` (ADR 0022).
+        commands.onDeleteNode(instanceId);
+      } else {
+        commands.onJoinPrevious(instanceId);
+      }
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (
+        e.key !== "Backspace" ||
+        e.isComposing ||
+        e.ctrlKey ||
+        e.altKey ||
+        e.metaKey
+      )
+        return;
+      // Shift does not change Backspace behavior. Capture keeps another key
+      // handler from acting on the same deletion intent.
+      handleBackspace(e);
+    };
+    const onBeforeInput = (e: InputEvent) => {
+      if (e.inputType === "deleteContentBackward" && !e.isComposing)
+        handleBackspace(e);
+    };
+    el.addEventListener("keydown", onKeyDown, true);
+    el.addEventListener("beforeinput", onBeforeInput);
+    return () => {
+      el.removeEventListener("keydown", onKeyDown, true);
+      el.removeEventListener("beforeinput", onBeforeInput);
+    };
+  }, [
+    textRef,
+    enabled,
+    node.isTask,
+    node.completed,
+    node.kind,
+    node.id,
+    instanceId,
+    commands,
+  ]);
+
+  // Enter on an empty quote unquotes the row in place (ADR 0079).
+  const enterExitsEmptyQuote = (el: HTMLElement | null) =>
+    !!el &&
+    exitEmptyQuoteOnEnter(el, (text) => commands.onTextChange(node.id, text));
+
+  useHotkeys(
+    focused
+      ? [
+          // Plugin per-bullet keymap (Seam D): hotkeys a plugin owns while this
+          // bullet is focused -- todos' Mod+Enter / Mod+D toggle completion. They
+          // run with pluginCtx() at event time; the registry guards them against the
+          // core's reserved keys. Same `enabled` gate as the rest, so a menu's
+          // Arrow/Enter takes precedence while open.
+          ...keymapSpecs.map((k) => ({
+            // KeymapSpec.hotkey is a plain string (plugin contract stays library-
+            // agnostic); the manager wants its RegisterableHotkey union here.
+            // SAFETY: KeymapSpec.hotkey is documented as a react-hotkeys combo string
+            hotkey: k.hotkey as UseHotkeyDefinition["hotkey"],
+            callback: () => {
+              const el = textRef.current;
+              if (
+                k.hotkey === "Mod+Enter" &&
+                el &&
+                openInlineTargetAtCaret(el, pluginCtx(), { linkParens: "edit" })
+              ) {
+                return;
+              }
+              k.run(node.id, pluginCtx());
+            },
+          })),
+          {
+            // Enter: split the bullet at the caret -- text left of the caret stays,
+            // text to its right moves into a new sibling below (caret at the end is
+            // just the empty-tail case of the same split).
+            hotkey: "Enter",
+            callback: (e) => {
+              const el = textRef.current;
+              if (el) {
+                const atom = getSelectedAtom(el);
+                if (atom) {
+                  const rect = atom.getBoundingClientRect();
+                  const handled = dispatchClick(atom, pluginCtx(), {
+                    preventDefault: () => e.preventDefault(),
+                    stopPropagation: () => e.stopPropagation(),
+                    clientX: rect.left + rect.width / 2,
+                    clientY: rect.top + rect.height / 2,
+                    source: "keyboard",
+                  });
+                  if (handled) return;
+                }
+              }
+              if (enterExitsEmptyQuote(el)) return;
+              if (el && node.kind === "numbered" && readSource(el) === "") {
+                commands.onSetKind(node.id, "paragraph");
+                decorate(el, "", 0, false);
+                setCaretOffset(el, 0);
+                return;
+              }
+              commands.onEnter(
+                node.id,
+                (el && getSelectionRange(el)) ?? {
+                  start: node.text.length,
+                  end: node.text.length,
+                },
+              );
+            },
+          },
+          {
+            // Space on a selected atom activates that atom's secondary keyboard
+            // action. Plain text space remains native.
+            hotkey: "Space",
+            callback: (e) => {
+              const el = textRef.current;
+              const atom = el ? getSelectedAtom(el) : null;
+              if (!atom) return;
+              // An atom is selected (a range around a contenteditable=false
+              // widget): a native space would REPLACE it, silently dropping the
+              // token. Always swallow the space here; then activate the atom's
+              // keyboard action if a plugin claims it.
+              e.preventDefault();
+              e.stopPropagation();
+              const rect = atom.getBoundingClientRect();
+              dispatchClick(atom, pluginCtx(), {
+                preventDefault: () => e.preventDefault(),
+                stopPropagation: () => e.stopPropagation(),
+                clientX: rect.left + rect.width / 2,
+                clientY: rect.top + rect.height / 2,
+                source: "keyboard",
+                key: " ",
+              });
+            },
+            options: { preventDefault: false, stopPropagation: false },
+          },
+          {
+            // Shift+Enter: same as Enter -- split into a sibling, never insert a
+            // literal newline. Captured explicitly so the contentEditable's
+            // default line break can't fire; bullets are single-line.
+            hotkey: "Shift+Enter",
+            callback: () => {
+              const el = textRef.current;
+              if (enterExitsEmptyQuote(el)) return;
+              commands.onEnter(
+                node.id,
+                (el && getSelectionRange(el)) ?? {
+                  start: node.text.length,
+                  end: node.text.length,
+                },
+              );
+            },
+          },
+          {
+            // Tab: indent under the previous sibling.
+            hotkey: "Tab",
+            callback: () => commands.onIndent(node.id),
+          },
+          {
+            // Shift+Tab: outdent one level.
+            hotkey: "Shift+Tab",
+            callback: () => commands.onOutdent(node.id),
+          },
+          {
+            // Cmd/Ctrl+Shift+Up: move this bullet up among its siblings; at the
+            // top edge it reparents into the parent's previous sibling. Default
+            // options always preventDefault, so macOS "extend selection to doc start"
+            // never fires inside the outline. See ADR 0009.
+            hotkey: "Mod+Shift+ArrowUp",
+            callback: () => commands.onMoveUp(node.id),
+          },
+          {
+            // Cmd/Ctrl+Shift+Down: move down; at the bottom edge it reparents into
+            // the parent's next sibling. Mirror of Mod+Shift+ArrowUp.
+            hotkey: "Mod+Shift+ArrowDown",
+            callback: () => commands.onMoveDown(node.id),
+          },
+          {
+            // Cmd/Ctrl+Shift+Delete: delete this bullet and its whole subtree,
+            // regardless of text or caret position. On Mac "delete" is the
+            // Backspace key; register Delete too for the forward-delete key.
+            hotkey: "Mod+Shift+Backspace",
+            callback: () => commands.onDeleteNode(instanceId),
+          },
+          {
+            hotkey: "Mod+Shift+Delete",
+            callback: () => commands.onDeleteNode(instanceId),
+          },
+          {
+            // Shift+ArrowUp from the top visual line: ENTER node multi-selection
+            // (ADR 0018) on THIS node only -- the first press selects the focused
+            // node; a subsequent Shift+arrow extends the run (handled while-selected
+            // in selection-mode.tsx). From a wrapped bullet's interior it falls
+            // through to native shift text-selection (preventDefault opted out),
+            // mirroring ArrowUp's edge-line rule. Selection mode has no caret, so we
+            // blur the bullet.
+            hotkey: "Shift+ArrowUp",
+            callback: (e) => {
+              const el = textRef.current;
+              if (!el || !atLineStart(el)) return;
+              e.preventDefault();
+              e.stopPropagation();
+              // Select the INSTANCE, not the content (ADR 0022): selecting a
+              // mirror by its source id would make select+delete remove the
+              // source and orphan every instance. instanceId === node.id for a
+              // mirror-free row.
+              selectSingle(el.dataset.historyKey ?? instanceId);
+              el.blur();
+              window.getSelection()?.removeAllRanges();
+            },
+            options: { preventDefault: false, stopPropagation: false },
+          },
+          {
+            // Shift+ArrowDown from the last visual line: same single-node entry as
+            // Shift+ArrowUp (entry is direction-agnostic -- it selects the focused
+            // node; the next press extends). Mirror of Shift+ArrowUp's edge gate.
+            hotkey: "Shift+ArrowDown",
+            callback: (e) => {
+              const el = textRef.current;
+              if (!el || !atLineEnd(el)) return;
+              e.preventDefault();
+              e.stopPropagation();
+              selectSingle(el.dataset.historyKey ?? instanceId);
+              el.blur();
+              window.getSelection()?.removeAllRanges();
+            },
+            options: { preventDefault: false, stopPropagation: false },
+          },
+          {
+            // Cmd/Ctrl+A -- the bounded selection ladder (ADR 0018), rung 1 -> 2.
+            // Rung 1 (native): a non-empty bullet whose text isn't already fully
+            // selected selects all its TEXT. Rung 2: once the text is fully selected
+            // (or the bullet is empty -- rung 1 is skipped), select this NODE and its
+            // subtree, entering node selection. Rung 3 (the whole view) is escalated
+            // by the while-selected handler once a selection exists.
+            hotkey: "Mod+A",
+            callback: (e) => {
+              const el = textRef.current;
+              if (!el) return;
+              const empty = el.textContent === "";
+              if (!empty && !isAllTextSelected(el)) return; // rung 1: native select-all
+              e.preventDefault();
+              e.stopPropagation();
+              selectSingle(el.dataset.historyKey ?? instanceId);
+              el.blur();
+              window.getSelection()?.removeAllRanges();
+            },
+            options: { preventDefault: false, stopPropagation: false },
+          },
+          {
+            // ArrowUp on the first visual line: move to the previous node,
+            // preserving the caret's column (its x). Within a wrapped bullet the
+            // browser default handles line-1 <- line-2 itself.
+            hotkey: "ArrowUp",
+            callback: (e) => {
+              const el = textRef.current;
+              if (!el || !atLineStart(el)) return;
+              e.preventDefault();
+              e.stopPropagation();
+              commands.onMoveFocus(node.id, "up", caretLineRect()?.left);
+            },
+            options: { preventDefault: false, stopPropagation: false },
+          },
+          {
+            // ArrowDown on the last visual line: move to the next node, preserving
+            // the caret's column (its x).
+            hotkey: "ArrowDown",
+            callback: (e) => {
+              const el = textRef.current;
+              if (!el || !atLineEnd(el)) return;
+              e.preventDefault();
+              e.stopPropagation();
+              commands.onMoveFocus(node.id, "down", caretLineRect()?.left);
+            },
+            options: { preventDefault: false, stopPropagation: false },
+          },
+          {
+            // Left at the start snakes to the previous visible node's end,
+            // matching the existing visible-order walk used by Up/Down.
+            hotkey: "ArrowLeft",
+            callback: (e) => {
+              const el = textRef.current;
+              if (el && selectAdjacentAtom(el, "left")) {
+                e.preventDefault();
+                e.stopPropagation();
+                return;
+              }
+              if (!el || !isCaretAtStart(el)) return;
+              e.preventDefault();
+              e.stopPropagation();
+              commands.onMoveFocus(node.id, "up");
+            },
+            options: { preventDefault: false, stopPropagation: false },
+          },
+          {
+            // Right at the end snakes to the next visible node's start.
+            hotkey: "ArrowRight",
+            callback: (e) => {
+              const el = textRef.current;
+              if (el && selectAdjacentAtom(el, "right")) {
+                e.preventDefault();
+                e.stopPropagation();
+                return;
+              }
+              if (!el || !isCaretAtEnd(el)) return;
+              e.preventDefault();
+              e.stopPropagation();
+              commands.onMoveFocus(node.id, "down");
+            },
+            options: { preventDefault: false, stopPropagation: false },
+          },
+          {
+            // Cmd/Ctrl+Down: open (reveal the children of) a closed bullet that
+            // has children. Direction encodes intent -- Down only ever opens.
+            // Default options preventDefault, so the caret never jumps to the end
+            // of the line; the toggle itself is conditional, making this a silent
+            // no-op on an already-open or childless bullet. See ADR 0007.
+            hotkey: "Mod+ArrowDown",
+            callback: () => {
+              // Toggle the INSTANCE (collapse is local, ADR 0022): on a mirror's
+              // own row this opens that mirror, leaving the source untouched.
+              if (hasChildren && instanceCollapsed)
+                commands.onToggleCollapsed(instanceId, false);
+            },
+          },
+          {
+            // Cmd/Ctrl+Up: close (collapse) an open bullet that has children.
+            // Mirror of Mod+ArrowDown -- Up only ever closes; otherwise a no-op.
+            hotkey: "Mod+ArrowUp",
+            callback: () => {
+              if (hasChildren && !instanceCollapsed)
+                commands.onToggleCollapsed(instanceId, true);
+            },
+          },
+          {
+            // Cmd/Ctrl+.: zoom this node to become the temporary root.
+            hotkey: "Mod+.",
+            callback: () => commands.onZoom(node.id),
+          },
+        ]
+      : EMPTY_KEYMAP,
+    { target: textRef, enabled },
+  );
+}
+
+// Whether the current selection spans exactly the whole bullet's text (the Cmd+A
+// ladder uses this to tell rung 1 "select the text" from rung 2 "select the
+// node"). A collapsed caret, a partial selection, or a selection that overflows
+// this bullet is not "all selected". Compared by string rather than range
+// boundary points: a native contentEditable Cmd+A selects at the editing-host
+// level, so the range's commonAncestorContainer can be an ANCESTOR of the span
+// (range-containment checks then wrongly fail). The selected text equalling the
+// bullet's text is the reliable signal.
+function isAllTextSelected(el: HTMLElement): boolean {
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed) return false;
+  const text = el.textContent ?? "";
+  return text.length > 0 && sel.toString() === text;
+}
+
+// Collapsed caret at the very start of the bullet, measured by absolute offset
+// so the test holds whether the line is one text node or split around chips.
+//
+// Deliberately fails CLOSED. `getCaretOffset` returns the literal 0 for three
+// different states -- no selection, a range outside this element, and a genuine
+// caret at offset 0 -- so the containment and collapse checks have to happen
+// here. This used to fail open (no selection => "at start"), which was tolerable
+// while both outcomes were non-destructive; now a false "at start" would MERGE
+// this bullet into the one above, and a non-collapsed selection ending at 0
+// would merge while text is selected.
+function isCaretAtStart(el: HTMLElement): boolean {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0 || !sel.isCollapsed) return false;
+  const range = sel.getRangeAt(0);
+  if (!el.contains(range.startContainer) || !el.contains(range.endContainer))
+    return false;
+  return getCaretOffset(el) === 0;
+}
+
+function isCaretAtEnd(el: HTMLElement): boolean {
+  const sel = window.getSelection();
+  if (!sel || !sel.isCollapsed || sel.rangeCount === 0) return false;
+  return getCaretOffset(el) === readSource(el).length;
+}
+
+// Caret-to-neighbor navigation is about VISUAL lines, not text offset: on a
+// single-line bullet the caret is on both the first and last line at once, so
+// Up/Down should always cross to the neighbor regardless of where in the text
+// it sits. Only a wrapped (multi-line) bullet should move the caret within
+// itself first. We detect this from the caret's rect vs the element's rect.
+function caretLineRect(): DOMRect | null {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return null;
+  const range = sel.getRangeAt(0);
+  let rect = range.getBoundingClientRect();
+  // A collapsed caret at a text-node boundary can report an empty rect in some
+  // browsers; fall back to its first client rect.
+  if (rect.height === 0) {
+    const first = range.getClientRects()[0];
+    if (first) rect = first;
+  }
+  return rect.height === 0 ? null : rect;
+}
+
+export function atLineStart(el: HTMLElement): boolean {
+  const rect = caretLineRect();
+  // No measurable caret (e.g. empty bullet) -> treat as the first line so Up
+  // crosses to the neighbor.
+  if (!rect) return true;
+  return rect.top - el.getBoundingClientRect().top < rect.height / 2;
+}
+
+function atLineEnd(el: HTMLElement): boolean {
+  const rect = caretLineRect();
+  if (!rect) return true;
+  return el.getBoundingClientRect().bottom - rect.bottom < rect.height / 2;
+}

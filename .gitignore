@@ -1,0 +1,35 @@
+node_modules
+dist
+.output
+.vinxi
+.wrangler
+.DS_Store
+*.log
+.env
+.env.local
+.routeTree.gen.tmp*
+
+# Local Worker secrets (wrangler dev)
+.dev.vars
+
+# CodeGraph index — per-machine, never committed.
+.codegraph/
+
+.impeccable/
+
+.shipstudio/
+
+# Playwright artifacts
+test-results/
+
+# Cursor continual-learning hook state (local index, not shared)
+.cursor/hooks/state/continual-learning*.json
+
+# Riptide artifacts (cloud-synced)
+.humanlayer/tasks/
+
+# Riptide workspace machine-local overrides
+.humanlayer/workspace.local.json
+
+# Amp orb portal runtime files
+.amp/portals/*

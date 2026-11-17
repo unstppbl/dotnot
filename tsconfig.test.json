@@ -1,0 +1,28 @@
+{
+  // Unit tests run under `bun test` (script: `test`). They live co-located as
+  // src/**/*.test.ts (and worker/**/*.test.ts for the Worker trust-boundary
+  // schemas) and are EXCLUDED from the app tsconfig so `bun:test` imports and
+  // Bun globals never leak into the browser app's typecheck. This file
+  // typechecks them on their own, mirroring typecheck:worker.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["bun"],
+    "noEmit": true
+  },
+  // vite-env.d.ts carries the `virtual:dotflowy-changelog` module declaration
+  // (ADR 0046) that this config's `include` override would otherwise drop.
+  "include": [
+    "src/vite-env.d.ts",
+    "src/**/*.test.ts",
+    "src/**/*.test.tsx",
+    "worker/**/*.test.ts",
+    "scripts/heavy-lane.ts",
+    "scripts/heavy-lane.test.ts",
+    "scripts/e2e-shards.ts",
+    "scripts/e2e-shards.test.ts",
+    "scripts/check-e2e-lanes.ts",
+    "scripts/release.ts",
+    "scripts/release.test.ts"
+  ],
+  "exclude": []
+}

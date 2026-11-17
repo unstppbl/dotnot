@@ -1,0 +1,196 @@
+diff --git a/dist/index.cjs b/dist/index.cjs
+index f22a899a..d0843e05 100644
+--- a/dist/index.cjs
++++ b/dist/index.cjs
+@@ -4042,32 +4042,41 @@ function Sheet({ open: openProp, defaultOpen = false, onOpenChange, detents = ["
+ 			phase
+ 		};
+ 	});
+-	(0, react.useEffect)(() => {
++	(0, react.useLayoutEffect)(() => {
+ 		if (phase === "closed") return;
+ 		const sheet = sheetRef.current;
+ 		const scrim = scrimRef.current;
++		const dialog = dialogRef.current;
++		const viewport = window.visualViewport;
++		let screen = innerHeight;
++		const sizeViewport = () => {
++			// Pinch zoom stays native; only follow an unzoomed keyboard viewport.
++			if (viewport && viewport.scale > 1) return;
++			screen = viewport?.height || innerHeight;
++			dialog.style.top = `${Math.max(0, viewport?.offsetTop || 0)}px`;
++			dialog.style.height = `${screen}px`;
++		};
++		sizeViewport();
+ 		const heights = () => {
+-			const screen = dialogRef.current?.clientHeight || innerHeight;
+-			return live.current.detents.map((detent) => detent === "medium" ? screen * MEDIUM : screen - LARGE_TOP);
++			return live.current.detents.map((detent) => detent === "medium" ? screen * MEDIUM : Math.max(screen * MEDIUM, screen - LARGE_TOP));
+ 		};
+ 		let stopLens;
+ 		let height = 0;
+ 		const paint = (next) => {
+ 			height = next;
+-			const screen = dialogRef.current?.clientHeight || innerHeight;
+ 			const medium = screen * MEDIUM;
+-			const large = screen - LARGE_TOP;
++			const large = Math.max(medium + 1, screen - LARGE_TOP);
+ 			const full = Math.min(1, Math.max(0, (next - medium) / (large - medium)));
+ 			const rest = live.current.detents.length ? Math.min(...heights()) : medium;
+ 			const inset = INSET * (1 - full);
+ 			sheet.style.left = sheet.style.right = `${inset}px`;
+ 			sheet.style.bottom = `${BOTTOM * (1 - full)}px`;
+ 			sheet.style.height = `${Math.max(rest, next)}px`;
+-			sheet.style.transform = next < rest ? `translateY(${rest - next}px)` : "";
++			sheet.style.transform = next < rest ? `translateY(${(rest - next) * (1 + BOTTOM / rest)}px)` : "";
+ 			sheet.style.setProperty("--lg-sheet-full", String(full));
+ 			sheet.style.borderRadius = `${RADIUS + 0 * full}px ${RADIUS + 0 * full}px ${RADIUS * (1 - full)}px ${RADIUS * (1 - full)}px`;
+ 			scrim.style.opacity = String(Math.min(1, Math.max(0, next / rest)));
+-			if (next === 0 && live.current.phase === "leaving") live.current.finished();
++			if (next <= 0.5 && live.current.phase === "leaving") live.current.finished();
+ 		};
+ 		const spring = createSpring(0, SPRING[0], SPRING[1], (next) => {
+ 			stopLens?.();
+@@ -4081,12 +4090,26 @@ function Sheet({ open: openProp, defaultOpen = false, onOpenChange, detents = ["
+ 		spring.paint();
+ 		const stopRim = fitRim(sheet);
+ 		const first = heights()[0] ?? 0;
+-		const cancelStart = afterGlassShows(() => spring.set(first, reducedMotion()));
++		const cancelStart = afterGlassShows(() => spring.set(heights()[0] ?? 0, reducedMotion()));
++		const resize = () => {
++			const before = heights();
++			const index = before.reduce((best, value, i) => Math.abs(value - height) < Math.abs(before[best] - height) ? i : best, 0);
++			sizeViewport();
++			drag.current = null;
++			if (live.current.phase === "open") spring.set(heights()[index] ?? 0, true);
++			else paint(height);
++		};
++		viewport?.addEventListener("resize", resize);
++		viewport?.addEventListener("scroll", resize);
++		window.addEventListener("resize", resize);
+ 		const settled = setInterval(() => {
+ 			if (!stopLens && Math.abs(height - first) < .01 && live.current.phase === "open") stopLens = fitLens(sheet);
+ 		}, 300);
+ 		return () => {
+ 			cancelStart();
++			viewport?.removeEventListener("resize", resize);
++			viewport?.removeEventListener("scroll", resize);
++			window.removeEventListener("resize", resize);
+ 			clearInterval(settled);
+ 			spring.stop();
+ 			stopLens?.();
+@@ -4196,7 +4219,7 @@ function Sheet({ open: openProp, defaultOpen = false, onOpenChange, detents = ["
+ 		}
+ 		const ahead = height + now.speed * .15;
+ 		const nearest = heights.reduce((best, value) => Math.abs(value - ahead) < Math.abs(best - ahead) ? value : best, heights[0] ?? 0);
+-		motion.current?.spring.set(nearest);
++		motion.current?.spring.set(nearest, reducedMotion());
+ 	};
+ 	return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("dialog", {
+ 		ref: dialogRef,
+@@ -4228,6 +4251,7 @@ function Sheet({ open: openProp, defaultOpen = false, onOpenChange, detents = ["
+ 				})
+ 			}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+ 				className: "lg-sheet-content",
++				"data-lg-no-sheet-drag": "",
+ 				children
+ 			})]
+ 		})] })
+diff --git a/dist/index.js b/dist/index.js
+index 7facb0d9..31535698 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -4041,32 +4041,41 @@ function Sheet({ open: openProp, defaultOpen = false, onOpenChange, detents = ["
+ 			phase
+ 		};
+ 	});
+-	useEffect(() => {
++	useLayoutEffect(() => {
+ 		if (phase === "closed") return;
+ 		const sheet = sheetRef.current;
+ 		const scrim = scrimRef.current;
++		const dialog = dialogRef.current;
++		const viewport = window.visualViewport;
++		let screen = innerHeight;
++		const sizeViewport = () => {
++			// Pinch zoom stays native; only follow an unzoomed keyboard viewport.
++			if (viewport && viewport.scale > 1) return;
++			screen = viewport?.height || innerHeight;
++			dialog.style.top = `${Math.max(0, viewport?.offsetTop || 0)}px`;
++			dialog.style.height = `${screen}px`;
++		};
++		sizeViewport();
+ 		const heights = () => {
+-			const screen = dialogRef.current?.clientHeight || innerHeight;
+-			return live.current.detents.map((detent) => detent === "medium" ? screen * MEDIUM : screen - LARGE_TOP);
++			return live.current.detents.map((detent) => detent === "medium" ? screen * MEDIUM : Math.max(screen * MEDIUM, screen - LARGE_TOP));
+ 		};
+ 		let stopLens;
+ 		let height = 0;
+ 		const paint = (next) => {
+ 			height = next;
+-			const screen = dialogRef.current?.clientHeight || innerHeight;
+ 			const medium = screen * MEDIUM;
+-			const large = screen - LARGE_TOP;
++			const large = Math.max(medium + 1, screen - LARGE_TOP);
+ 			const full = Math.min(1, Math.max(0, (next - medium) / (large - medium)));
+ 			const rest = live.current.detents.length ? Math.min(...heights()) : medium;
+ 			const inset = INSET * (1 - full);
+ 			sheet.style.left = sheet.style.right = `${inset}px`;
+ 			sheet.style.bottom = `${BOTTOM * (1 - full)}px`;
+ 			sheet.style.height = `${Math.max(rest, next)}px`;
+-			sheet.style.transform = next < rest ? `translateY(${rest - next}px)` : "";
++			sheet.style.transform = next < rest ? `translateY(${(rest - next) * (1 + BOTTOM / rest)}px)` : "";
+ 			sheet.style.setProperty("--lg-sheet-full", String(full));
+ 			sheet.style.borderRadius = `${RADIUS + 0 * full}px ${RADIUS + 0 * full}px ${RADIUS * (1 - full)}px ${RADIUS * (1 - full)}px`;
+ 			scrim.style.opacity = String(Math.min(1, Math.max(0, next / rest)));
+-			if (next === 0 && live.current.phase === "leaving") live.current.finished();
++			if (next <= 0.5 && live.current.phase === "leaving") live.current.finished();
+ 		};
+ 		const spring = createSpring(0, SPRING[0], SPRING[1], (next) => {
+ 			stopLens?.();
+@@ -4080,12 +4089,26 @@ function Sheet({ open: openProp, defaultOpen = false, onOpenChange, detents = ["
+ 		spring.paint();
+ 		const stopRim = fitRim(sheet);
+ 		const first = heights()[0] ?? 0;
+-		const cancelStart = afterGlassShows(() => spring.set(first, reducedMotion()));
++		const cancelStart = afterGlassShows(() => spring.set(heights()[0] ?? 0, reducedMotion()));
++		const resize = () => {
++			const before = heights();
++			const index = before.reduce((best, value, i) => Math.abs(value - height) < Math.abs(before[best] - height) ? i : best, 0);
++			sizeViewport();
++			drag.current = null;
++			if (live.current.phase === "open") spring.set(heights()[index] ?? 0, true);
++			else paint(height);
++		};
++		viewport?.addEventListener("resize", resize);
++		viewport?.addEventListener("scroll", resize);
++		window.addEventListener("resize", resize);
+ 		const settled = setInterval(() => {
+ 			if (!stopLens && Math.abs(height - first) < .01 && live.current.phase === "open") stopLens = fitLens(sheet);
+ 		}, 300);
+ 		return () => {
+ 			cancelStart();
++			viewport?.removeEventListener("resize", resize);
++			viewport?.removeEventListener("scroll", resize);
++			window.removeEventListener("resize", resize);
+ 			clearInterval(settled);
+ 			spring.stop();
+ 			stopLens?.();
+@@ -4195,7 +4218,7 @@ function Sheet({ open: openProp, defaultOpen = false, onOpenChange, detents = ["
+ 		}
+ 		const ahead = height + now.speed * .15;
+ 		const nearest = heights.reduce((best, value) => Math.abs(value - ahead) < Math.abs(best - ahead) ? value : best, heights[0] ?? 0);
+-		motion.current?.spring.set(nearest);
++		motion.current?.spring.set(nearest, reducedMotion());
+ 	};
+ 	return /* @__PURE__ */ jsx("dialog", {
+ 		ref: dialogRef,
+@@ -4227,6 +4250,7 @@ function Sheet({ open: openProp, defaultOpen = false, onOpenChange, detents = ["
+ 				})
+ 			}), /* @__PURE__ */ jsx("div", {
+ 				className: "lg-sheet-content",
++				"data-lg-no-sheet-drag": "",
+ 				children
+ 			})]
+ 		})] })

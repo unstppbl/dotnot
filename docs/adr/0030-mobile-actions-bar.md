@@ -1,0 +1,143 @@
+---
+status: accepted
+---
+
+# Mobile actions bar
+
+**What.** A mobile-only, keyboard-anchored action strip live only while a bullet is being edited. Six buttons,
+grouped: `[outdent ⇤][indent ⇥] | [undo ↺][redo ↻] | [complete ☑][/]`. It gives thumb-reachable access to the
+structural + history actions that on desktop are keyboard shortcuts (`Tab`/`Shift+Tab`, `Mod+Z`/`Mod+Shift+Z`,
+`Mod+Enter`) plus the `/` command palette — none of which a software keyboard exposes. Shipped compiled
+default ON behind an `isMobileBar()` localStorage escape-hatch flag (the ADR 0019 shape); the flag was
+deleted once dogfooded (2026-07-12) — the bar now mounts unconditionally and self-gates on pointer type. A text
+selection inside one bullet swaps these buttons for the formatting set
+([ADR 0069](./0069-touch-selection-formatting.md)).
+
+**Signal assignment.** Pointer type gates presence; DOM focus and keyboard geometry gate visibility;
+the visual viewport positions the bar:
+
+- **Presence = pointer type.** `matchMedia("(pointer: coarse)")` gates whether the bar exists at all
+  (mirrored by a CSS `@media` defense). Pointer type, not viewport width, is the honest "this is a finger"
+  signal — the same seam ADR 0029 already uses for the right-edge chevron. A mouse user in a narrow window
+  never sees it; a phone always does.
+- **Visibility = live editable focus + keyboard-up viewport.** `findFocusedId()` must resolve the actual
+  `document.activeElement`, which must still be editable, in an active, visible document. Logical node
+  selection is not input focus. A keyboard can close without blur; WebKit can also remove a focused
+  virtualized row without emitting blur. The bar rechecks viewport and document lifecycle events and
+  observes removal along the focused input's ancestor chain, without observing text mutations or
+  changing selection, composition, or focus restoration.
+  With Visual Viewport support, the layout height must exceed `height * scale` by more than 100 CSS
+  pixels. Scaling removes pinch zoom from that estimate; ignoring small differences avoids mistaking
+  browser chrome for a keyboard. Panning does not subtract from keyboard size. This is a heuristic for
+  docked keyboards, not a universal keyboard visibility API: floating/overlay keyboards and hardware
+  keyboards do not produce the required reduction. Engines without Visual Viewport and embedded frames
+  (including the landing demo) retain focus-only visibility as a compatibility fallback. Iframe visual
+  viewport dimensions always match their layout viewport, so they cannot detect keyboard dismissal.
+- **Position = visual viewport.** `useKeyboardViewport` uses Adobe's `useViewportSize` from
+  `@react-aria/utils` for keyboard-aware height and tracks `visualViewport.offsetTop` on rAF-throttled
+  resize/scroll events. A fixed, pointer-transparent frame fits that visible band, with the interactive
+  capsule at its bottom. This preserves the editor's window scrolling and virtualization. Position follows
+  viewport changes without a second CSS animation; pinch zoom updates are ignored. When the visible band
+  reaches the layout viewport's bottom, the frame adds `env(safe-area-inset-bottom)`.
+
+**Keep wrapped typing visible.** While mounted for editing, `MobileActionsBar` reveals
+the collapsed outline caret after focus, input, composition end, and viewport resize,
+using a coalesced animation frame after decoration. This covers both list rows and the
+zoomed title, including text taller than the visible band. Scroll the window by the
+minimum distance needed to keep the caret between the header and toolbar, with up to
+8px of breathing room, reduced when a landscape keyboard leaves barely one line.
+Start after the toolbar mounts and observe its frame size to reconcile late viewport
+commits. Measure bounds from the rendered frame, not raw `visualViewport.offsetTop`:
+after rotation, Safari can report that offset in a different coordinate space from
+client rects. Reserve trailing body space for the keyboard and toolbar on coarse
+pointers, including wide landscape layouts, and release unanchored sticky chrome
+while editing there too. Follow document and focused-input size changes after an edit
+so late virtual-row measurements cannot leave the caret obscured. Pointer, touch,
+wheel, or keyboard gestures release that hold; ordinary viewport panning and selection
+changes do not request reveals. The bar's editing lifecycle owns the visibility
+signals, including the iframe fallback. Skip pinch zoom and leave Quick-add's separate
+scrolling unchanged. A Day stream title anchor retains ownership until editing
+releases it; focusing its offscreen last child alone must not reveal that child.
+
+**Why pure `visualViewport`, not `env(keyboard-inset-*)`.** The `env(keyboard-inset-*)` CSS environment
+variables are Chromium-only; iOS Safari (the primary target) needs the JS `visualViewport` path regardless.
+One system that covers both beats two half-systems, so the bar tracks the keyboard entirely in JS.
+
+**Why we blend with iOS's keyboard accessory bar rather than remove it.** On iOS Safari there is **no web API**
+to hide or reorder the system keyboard accessory bar (the floating pill with the prev/next-field arrows + a
+"Done" check). That control belongs to WebKit; a native app suppresses it via `inputAccessoryView`, the web
+has no equivalent, and standalone/PWA mode does not change this. So our bar cannot own that space — a second
+full-width bar just _fights_ the system one and reads as two competing strips. Instead the bar is styled as a
+**floating frosted-glass capsule** that adopts the accessory pill's shape _grammar_ — inset from the edges,
+large radius, translucent + blurred, soft shadow — so the two read as one two-tier system: our app-action tier
+above iOS's system tier. We deliberately match the **family, not iOS's exact tokens** (radius/blur/inset drift
+per OS version; chasing them would rot). Two de-duplications keep it from reading as redundant chrome:
+**there is no dismiss button** (iOS's own "Done" and Android's back gesture already dismiss the keyboard), and
+**complete uses a boxed check (`☑`), not a bare `✓`**, so it can't be mistaken for the "Done" check sitting
+right below it. On platforms without an accessory bar (Android, desktop-touch) the same floating capsule still
+reads well — it assumes no system bar beneath it, unlike a flat full-width edge bar.
+
+**Liquid Glass material.** The capsule uses the pinned `@onlymoein/liquidglass`
+`Glass` surface and the header's app-theme palette (ADR 0076), loaded only while
+editing on a coarse pointer. Keep the material separate from the horizontally
+scrolling controls so the rim stays intact. Native buttons retain their existing
+tap, selection, focus, and history behavior. The shared `useOpaqueChrome` check
+unmounts glass for reduced motion or transparency, increased contrast, forced
+colors, or missing backdrop-filter support. Its bordered opaque fallback has
+the same geometry, including while the glass chunk loads. Reduced motion also
+disables button transitions. The editing toolbar stays visible while navigation
+fades during writing (ADR 0078).
+
+**Why the `/` button inserts a literal `/` instead of toggling a menu.** The button runs
+`document.execCommand("insertText", false, "/")` at the caret, faithfully simulating the keystroke so the
+row's own `useSlashMenu`/`detectSlash` opens the palette — the bar reuses the exact path a typed `/` takes,
+with zero new cross-component menu-state plumbing. It is **insert-and-open, not a true toggle** (closing stays
+via Escape or picking a command). A real toggle would need the bar to observe another component's menu state,
+which is not worth the plumbing for v1.
+
+**Why `onPointerDown` + `preventDefault`, but the action fires on `pointerup`.** Tapping a button must not
+steal focus from the contentEditable, or the caret and keyboard collapse and the action loses its target.
+`preventDefault()` on `pointerdown` keeps the span focused across the tap — **every** button does this, with no
+exception now that there is no dismiss button. (Dismissing is delegated to the system: iOS "Done" / Android
+back.) But the **action runs on `pointerup`, and only if the finger stayed within a small threshold** of where
+it landed: the pill is `overflow-x-auto`, and firing on `pointerdown` meant a horizontal scroll of the strip
+triggered whatever button the finger started on. The `preventDefault` stays on `pointerdown` (it preserves
+focus and does NOT block the overflow scroll, which is governed by `touch-action`); the tap-vs-scroll split is
+the bullet-dot's movement-threshold mechanic (`use-drag-reorder.ts`).
+
+**Why the bar is dumb chrome (a facade over the existing commands).** A `useMobileBarActions` hook inside
+`OutlineEditor` closes over `refs` / `findFocusedId` / the existing `commands` (`useNodeCommands`) /
+`undo` / `redo` and exposes zero-arg methods, each resolving `findFocusedId()` internally. So the bar inherits
+`runStructural` atomicity (ADR 0009), protected-node guards (ADR 0015), and undo coalescing for free — it adds
+no new mutation path. Buttons are **static and always-enabled, with no per-node subscription**: feedback lives
+at the row (strikethrough on complete, the `.node-acted` flash on move, the protected-node `rejectRow` shake +
+toast). Invalid actions safely no-op (indent/outdent boundary returns false, empty-history undo does nothing,
+a protected complete shakes and toasts). Wiring per-row bar state would re-fight the ADR 0014 render budget for
+no user-visible gain.
+
+**Why core, not a plugin seam.** The six actions are a fixed toolbar. "Plugins contribute bar actions" is a
+documented future seam, not built here — a v1 with a stable button set ships without inventing a contribution
+API first.
+
+**Rejected alternatives.**
+
+- **Remove iOS's keyboard accessory bar.** Not possible from web Safari (no API); blending is the honest
+  response. A native shell (Capacitor `Keyboard.setAccessoryBarVisible(false)` / WKWebView) is the only way to
+  truly remove it, and is out of scope.
+- **Full-width flat edge bar.** Reads as a second bar fighting iOS's; assumes no system pill beneath it. The
+  floating capsule reads as a matched sibling and generalizes to Android/desktop-touch.
+- **A dismiss button.** Redundant with iOS "Done" / Android back, and its bare check twinned iOS's "Done"
+  check — dropping it de-duplicates and simplifies the control set.
+- **Width breakpoint instead of pointer type.** Would show the bar to a desktop user in a narrow window and
+  hide it on a large tablet — the wrong axis. Pointer type is the finger signal.
+- **`env(keyboard-inset-*)` for positioning.** Chromium-only; iOS needs the JS path anyway (see above).
+- **True `/` toggle.** Needs cross-component menu-state observation for a marginal gain over insert-and-open.
+- **Per-node reactive button state (enable/disable, checked).** Re-fights the ADR 0014 per-node render budget;
+  row-level feedback already tells the user what happened.
+
+**Manual iPhone checklist in the PR:** real keyboard animation, iOS contentEditable focus-preservation under
+`preventDefault`, and how the glass capsule reads stacked above the system accessory pill. Playwright can't
+drive a real software keyboard or render the iOS accessory bar. The e2e suite (`e2e/mobile-actions-bar.spec.ts`)
+checks geometry with synthetic visual-viewport resize/scroll events in Chromium and WebKit, including
+keyboard close/reopen without blur, pinch zoom, and the no-API fallback. It also checks virtualized input
+removal, logical selection, focus restoration, coarse-only mount, sheets, and each button's action wiring.

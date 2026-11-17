@@ -1,0 +1,642 @@
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
+
+import type { QueryFilter } from "../data/filter-query";
+import type { ExternalDropTargetSpec, PluginContext } from "../plugins/types";
+
+import { isMirrorsEnabled } from "../data/flags";
+import { getOutlineScroller } from "../data/outline-scroll";
+import { getSelectionDragSet } from "../data/selection-fill";
+import { type Node, type TreeIndex } from "../data/tree";
+import { virtualRowRect } from "../data/virtual-nav";
+import {
+  buildVisibleRows,
+  instanceIdForKey,
+  parentKeyOf,
+} from "../data/visible-order";
+import { INDENT_PX } from "./OutlineRow";
+
+/**
+ * Pointer-driven drag to reorder and reparent a bullet, for mouse and touch.
+ * Drives the gesture imperatively (no React state on the hot path): on each
+ * pointermove it measures the rendered rows, resolves the drop to a parent +
+ * predecessor, and positions a floating pill and a drop indicator directly in
+ * the DOM. The single `moveNode` call happens on release. See ADR 0010.
+ *
+ * The whole feature hangs off the bullet dot, which already zooms on click:
+ * `startDrag` arms a movement threshold on pointerdown, and `consumeClick`
+ * lets the dot's click handler tell a real drag apart from a plain click (only
+ * the latter should zoom).
+ */
+
+// Movement (px) before a press becomes a drag. Below this, it's a click → zoom.
+const THRESHOLD = 5;
+// A touch must stay within the movement threshold for this long. Earlier
+// movement belongs to native scrolling, not to reorder.
+const TOUCH_HOLD_MS = 350;
+// Indent per depth level. The render's single source (OutlineRow.INDENT_PX);
+// measured from the live rows when possible, this is the fallback so the
+// windowed drop-depth projection can't drift from the rendered indent.
+const INDENT_FALLBACK = INDENT_PX;
+// How much of an indent the pointer must travel rightward before a drop nests
+// one level deeper. 0 = snap to the nearest level (flips at the halfway point);
+// higher = stickier toward the shallower level, so a near-vertical drag stays
+// at sibling depth instead of slipping under the row above. 0.4 means you cross
+// ~90% of an indent to nest. Tunable feel knob. See ADR 0010.
+const NEST_RESISTANCE = 0.4;
+// Distance from a viewport edge (px) that triggers auto-scroll while dragging.
+const EDGE = 72;
+// Max auto-scroll speed (px per frame) at the very edge.
+const SCROLL_MAX = 18;
+
+interface Row {
+  // The render ADDRESS (row.key) -- the drag's identity, so a windowed source
+  // descendant inside a mirror is the exact on-screen row, not its source copy
+  // (ADR 0022). Equals `id` for every mirror-free row, so the 99% path is
+  // unchanged. Geometry (virtualRowRect) and the refs lookup both key off this.
+  key: string;
+  // The INSTANCE (position) node id -- what `moveNode` repositions. Inside a
+  // mirror's window this is the real node (instance === content), so reordering
+  // it restructures the source and shows in every instance.
+  id: string;
+  // The CONTENT node id (`mirrorOf ?? id`). Used when this row is the drop
+  // PARENT: dropping under a mirror targets its SOURCE, so the new child windows
+  // into every instance (the ADR 0022 field split, applied in onMove).
+  contentId: string;
+  // The RENDER parent's instance id (`instanceIdForKey(parentKeyOf(key))`), not
+  // the tree parent: inside a mirror a windowed child's render parent is the
+  // mirror instance, so the sibling/ancestor projection stays within the window.
+  // Field-split back to a content id in onMove. Equals the tree parent off-flag.
+  parentId: string | null;
+  depth: number; // relative to the zoom root: its direct children are depth 0
+  el: HTMLElement | null;
+}
+
+// A row's viewport box for hit-testing, synthesized from the virtualizer's
+// measurements (so an off-screen target still has geometry).
+interface RowRect {
+  top: number;
+  bottom: number;
+  height: number;
+  left: number;
+  right: number;
+}
+
+interface DragDeps {
+  getIndex: () => TreeIndex;
+  getRootId: () => string | null;
+  /** The composed Seam-G visibility prune (hide-completed today). Drag mirrors
+   *  the render: a hidden node is not a droppable row. See ADR 0001. */
+  getIsHidden: () => (node: Node) => boolean;
+  /** The active `?q=` query filter (ADR 0047), or null. Read at event time (the
+   *  editor supplies `getViewFilter`) so the drag's row model is exactly the
+   *  filtered rows the editor renders: a row the filter pruned out of the DOM is
+   *  not a drop target, and a match revealed inside a collapsed subtree IS one.
+   *  See the ADR 0047 amendment and issue #244. */
+  getFilter: () => QueryFilter | null;
+  /** The `.outline-row` element for a row KEY (via the editor's refs registry,
+   *  keyed by row.key since ADR 0022; key === id off the flag). */
+  getRowEl: (key: string) => HTMLElement | null;
+  /** The `ul.outline-list` element, for the indicator's right edge. */
+  getListEl: () => HTMLElement | null;
+  /** Horizontal owner for deeply nested rows (ADR 0069). */
+  getHorizontalScrollEl: () => HTMLElement | null;
+  /** Plugin-owned controls that can receive this structural drag (Seam M). */
+  getExternalDropTargets: () => readonly ExternalDropTargetSpec[];
+  /** Live plugin context, resolved only when an external drop commits. */
+  getPluginContext: () => PluginContext;
+  /**
+   * Commit the drop. `grabbedKey` is the dragged row's render address; the parent
+   * + predecessor are INSTANCE ids from the render hierarchy. The editor resolves
+   * the field split (a drop under a mirror targets its source) and re-derives the
+   * landing focus key from the post-move render walk. Off the flag these are bare
+   * ids and the resolution is a no-op.
+   */
+  onMove: (
+    grabbedKey: string,
+    newParentInstanceId: string | null,
+    afterSiblingInstanceId: string | null,
+    pointerType: string,
+  ) => void;
+}
+
+interface DragState {
+  /** The grabbed row's KEY (render address) -- buildRows/getRowEl/onMove all key
+   *  off it. Equals the node id for every mirror-free drag. */
+  id: string;
+  /** Structural roots carried by an external target. One instance id for an
+   *  ordinary drag, or the active selection's ordered root run. */
+  nodeIds: string[];
+  /** Render rows dimmed while the drag is active. */
+  sourceKeys: string[];
+  startX: number;
+  startY: number;
+  pointerId: number;
+  pointerType: string;
+  pressedAt: number;
+  dragging: boolean;
+  rows: Row[]; // visible rows excluding the grabbed node + its subtree
+  indent: number;
+  lastX: number;
+  lastY: number;
+  pending: { parentId: string | null; afterSiblingId: string | null } | null;
+  external: {
+    spec: ExternalDropTargetSpec;
+    element: HTMLElement;
+  } | null;
+  indicator: HTMLElement | null;
+  pill: HTMLElement | null;
+  raf: number | null;
+  // The exact listener instances registered for this drag, so cleanup removes
+  // the same references even if the component re-rendered mid-drag.
+  moveHandler: (e: PointerEvent) => void;
+  upHandler: (e: PointerEvent) => void;
+  cancelHandler: (e: PointerEvent) => void;
+}
+
+export function useDragReorder(deps: DragDeps) {
+  const depsRef = useRef(deps);
+  depsRef.current = deps;
+
+  const state = useRef<DragState | null>(null);
+  // Set on a real drag so the dot's click (which follows pointerup) skips zoom.
+  const consumed = useRef(false);
+
+  const cleanup = useCallback(() => {
+    const s = state.current;
+    if (!s) return;
+    if (s.raf != null) cancelAnimationFrame(s.raf);
+    s.external?.element.removeAttribute("data-external-drop-active");
+    s.indicator?.remove();
+    s.pill?.remove();
+    for (const key of s.sourceKeys) {
+      depsRef.current.getRowEl(key)?.classList.remove("drag-source");
+    }
+    document.body.classList.remove("dragging-active");
+    document.removeEventListener("pointermove", s.moveHandler);
+    document.removeEventListener("pointerup", s.upHandler);
+    document.removeEventListener("pointercancel", s.cancelHandler);
+    state.current = null;
+  }, []);
+
+  // Build the visible, ordered rows (matching what's rendered), with depth,
+  // excluding the grabbed row and everything under it (can't drop into self).
+  //
+  // Reuses `buildVisibleRows` -- the SAME flat walk the editor renders and the
+  // virtualizer indexes -- so the drag's rows can't drift from what's on screen
+  // (inside a mirror the ad-hoc tree walk produced the wrong rows: it never
+  // resolved the windowed source descendants, so their geometry was missing and
+  // the drop line projected off only the non-mirror rows). The grabbed subtree
+  // is the CONTIGUOUS run of deeper rows right after the grabbed one -- the flat
+  // list's standard subtree property, uniform across mirror-free and crossed
+  // paths. The active `?q=` filter is threaded through (issue #244 / the ADR 0047
+  // amendment): the drag's rows are exactly the filtered rows the render shows,
+  // so a filtered-out row is never a drop target and a match revealed inside a
+  // collapsed subtree is. A drop in a gap whose real siblings are hidden lands
+  // after the visible predecessor (the projection already computes that once the
+  // model is filtered); a node that lands hidden is disclosed by the editor's
+  // onMove (the "vanish" toast).
+  const buildRows = useCallback((grabbedKey: string): Row[] => {
+    const { getIndex, getRootId, getIsHidden, getFilter, getRowEl } =
+      depsRef.current;
+    const index = getIndex();
+    const rootId = getRootId();
+    const isHidden = getIsHidden();
+    const visible = buildVisibleRows(
+      index,
+      rootId,
+      isHidden,
+      getFilter(),
+      isMirrorsEnabled(),
+    );
+
+    // The grabbed row, then skip it + its rendered subtree (rows deeper than it,
+    // up to the next row at or above its depth).
+    const gi = visible.findIndex((r) => r.key === grabbedKey);
+    let skipEnd = gi;
+    if (gi !== -1) {
+      const grabbedDepth = visible[gi]!.depth;
+      skipEnd = gi + 1;
+      while (
+        skipEnd < visible.length &&
+        visible[skipEnd]!.depth > grabbedDepth
+      ) {
+        skipEnd++;
+      }
+    }
+
+    const rows: Row[] = [];
+    for (let i = 0; i < visible.length; i++) {
+      if (gi !== -1 && i >= gi && i < skipEnd) continue;
+      const vr = visible[i]!;
+      const parentKey = parentKeyOf(vr.key);
+      rows.push({
+        key: vr.key,
+        id: vr.id,
+        contentId: vr.contentId,
+        // Render parent: the mirror/ancestor instance the row sits under, or the
+        // node's tree parent at the top level (key === id, parentKey === null).
+        parentId: parentKey
+          ? instanceIdForKey(parentKey)
+          : (index.byId.get(vr.id)?.parentId ?? null),
+        depth: vr.depth,
+        el: getRowEl(vr.key),
+      });
+    }
+    return rows;
+  }, []);
+
+  const beginDrag = useCallback(() => {
+    const s = state.current;
+    if (!s) return;
+    s.dragging = true;
+    s.rows = buildRows(s.id);
+
+    // Derive the per-level indent from two rows at different depths; fall back
+    // to the CSS constant when the list is too shallow to measure.
+    s.indent = INDENT_FALLBACK;
+    const a = s.rows.find((r) => r.el);
+    const b = s.rows.find((r) => r.el && r.depth !== a?.depth);
+    if (a?.el && b?.el && a.depth !== b.depth) {
+      const la = a.el.getBoundingClientRect().left;
+      const lb = b.el.getBoundingClientRect().left;
+      s.indent = Math.abs((la - lb) / (a.depth - b.depth)) || INDENT_FALLBACK;
+    }
+
+    for (const key of s.sourceKeys) {
+      depsRef.current.getRowEl(key)?.classList.add("drag-source");
+    }
+
+    const index = depsRef.current.getIndex();
+    let text =
+      index.byId.get(instanceIdForKey(s.id))?.text?.trim() || "Untitled";
+    if (s.nodeIds.length > 1) text += ` +${s.nodeIds.length - 1}`;
+
+    const pill = document.createElement("div");
+    pill.className = "drag-pill";
+    pill.textContent = text;
+    document.body.appendChild(pill);
+    s.pill = pill;
+
+    const indicator = document.createElement("div");
+    indicator.className = "drag-indicator";
+    document.body.appendChild(indicator);
+    s.indicator = indicator;
+
+    document.body.classList.add("dragging-active");
+  }, [buildRows]);
+
+  // Resolve the pointer position to a drop gap + target depth, position the
+  // indicator and pill, and stash the pending (parent, predecessor).
+  const project = useCallback((px: number, py: number) => {
+    const s = state.current;
+    if (!s) return;
+    if (s.pill) {
+      s.pill.style.left = `${px + 12}px`;
+      s.pill.style.top = `${py + 12}px`;
+    }
+
+    // External plugin target wins over ordinary outline-gap projection. The
+    // floating drag pill is pointer-events:none, so elementFromPoint sees the
+    // actual rendered control beneath the pointer/finger center (ADR 0054).
+    const hit = document.elementFromPoint(px, py);
+    let external: DragState["external"] = null;
+    if (hit instanceof Element) {
+      for (const spec of depsRef.current.getExternalDropTargets()) {
+        const match = hit.closest(spec.selector);
+        const element = match instanceof HTMLElement ? match : null;
+        if (element && (!spec.accepts || spec.accepts(element, s.nodeIds))) {
+          external = { spec, element };
+          break;
+        }
+      }
+    }
+    if (external) {
+      if (
+        s.external?.spec !== external.spec ||
+        s.external.element !== external.element
+      ) {
+        s.external?.element.removeAttribute("data-external-drop-active");
+        external.element.setAttribute("data-external-drop-active", "");
+        s.external = external;
+      }
+      s.pending = null;
+      if (s.indicator) s.indicator.style.display = "none";
+      return;
+    }
+    s.external?.element.removeAttribute("data-external-drop-active");
+    s.external = null;
+    if (s.indicator) s.indicator.style.display = "";
+
+    // Geometry source: the virtualizer's measurements (via the nav bridge the
+    // editor wires on mount), so an off-screen drop target still has a
+    // position, estimated until it renders.
+    const listEl = depsRef.current.getListEl();
+    const listRect = listEl?.getBoundingClientRect();
+    const scroller = getOutlineScroller()!;
+    const viewportOffset =
+      scroller.scrollTop - scroller.getBoundingClientRect().top;
+    const pairs: { row: Row; rect: RowRect }[] = [];
+    for (const r of s.rows) {
+      const vr = virtualRowRect(r.key, viewportOffset);
+      if (!vr) continue;
+      // Uniform indent: depth-0 left is the container left; deeper rows add
+      // depth * indent (OutlineRow's paddingInlineStart). project() backs
+      // baseLeft out of this exactly, so the synthesized left is self-consistent.
+      const left = (listRect?.left ?? 0) + r.depth * s.indent;
+      pairs.push({
+        row: r,
+        rect: {
+          top: vr.top,
+          bottom: vr.top + vr.height,
+          height: vr.height,
+          left,
+          right: listRect?.right ?? left + 240,
+        },
+      });
+    }
+    const rows = pairs.map((p) => p.row);
+    const rects = pairs.map((p) => p.rect);
+
+    // Gap: index of the first row whose vertical midpoint is below the pointer.
+    let gap = rows.length;
+    for (let i = 0; i < rows.length; i++) {
+      if (py < rects[i]!.top + rects[i]!.height / 2) {
+        gap = i;
+        break;
+      }
+    }
+    const above = gap > 0 ? rows[gap - 1]! : null;
+    const aboveRect = gap > 0 ? rects[gap - 1]! : null;
+    const below = gap < rows.length ? rows[gap]! : null;
+    const belowRect = gap < rows.length ? rects[gap]! : null;
+
+    // Legal depth range at this gap: as deep as a child of the row above, as
+    // shallow as the row below (or top-level). 0 = direct child of the zoom
+    // root, so the lower bound also keeps the node inside the current view.
+    const maxDepth = above ? above.depth + 1 : 0;
+    const minDepth = below ? below.depth : 0;
+
+    // Base x of depth 0, backed out from a known row, then depth from pointer x.
+    const ref = above ?? below;
+    const refRect = aboveRect ?? belowRect;
+    const baseLeft = ref && refRect ? refRect.left - ref.depth * s.indent : 0;
+    // Subtract NEST_RESISTANCE so gaining depth needs deliberate rightward
+    // travel; shedding depth (moving left) stays easy.
+    const desired = Math.round((px - baseLeft) / s.indent - NEST_RESISTANCE);
+    const depth = Math.max(minDepth, Math.min(maxDepth, desired));
+
+    // Parent + predecessor for `depth` at this gap.
+    let parentId: string | null;
+    if (depth === 0 || !above) {
+      parentId = depsRef.current.getRootId();
+    } else if (depth === above.depth + 1) {
+      parentId = above.id; // become the row above's (last/only) child
+    } else if (depth === above.depth) {
+      parentId = above.parentId; // sibling of the row above
+    } else {
+      // Shallower than the row above: adopt the nearest ancestor at this depth.
+      let found: string | null = depsRef.current.getRootId();
+      for (let i = gap - 1; i >= 0; i--) {
+        if (rows[i]!.depth === depth) {
+          found = rows[i]!.parentId;
+          break;
+        }
+        if (rows[i]!.depth < depth) break;
+      }
+      parentId = found;
+    }
+
+    // Predecessor: nearest row above the gap at exactly `depth` under `parentId`.
+    // Stop if we drop below `depth` first — then we're the first child (null).
+    let afterSiblingId: string | null = null;
+    for (let i = gap - 1; i >= 0; i--) {
+      if (rows[i]!.depth < depth) break;
+      if (rows[i]!.depth === depth && rows[i]!.parentId === parentId) {
+        afterSiblingId = rows[i]!.id;
+        break;
+      }
+    }
+
+    s.pending = { parentId, afterSiblingId };
+
+    // Indicator: a line at the gap, indented to the target depth. listEl/listRect
+    // were resolved above (shared with the geometry source).
+    const y = aboveRect
+      ? aboveRect.bottom
+      : belowRect
+        ? belowRect.top
+        : (listRect?.top ?? py);
+    const left = baseLeft + depth * s.indent;
+    const right = listRect?.right ?? left + 240;
+    if (s.indicator) {
+      s.indicator.style.top = `${y}px`;
+      s.indicator.style.left = `${left}px`;
+      s.indicator.style.width = `${Math.max(40, right - left)}px`;
+    }
+  }, []);
+
+  // Auto-scroll loop: while the pointer sits inside the editor's edge band,
+  // scroll vertically or horizontally, then re-project so off-screen drop
+  // targets and depths become reachable. Outside the editor, leave scrolling
+  // alone so chrome drop targets (such as calendar days) stay reachable.
+  const tickScroll = useCallback(() => {
+    const s = state.current;
+    if (!s || !s.dragging) return;
+    s.raf = requestAnimationFrame(tickScroll);
+    const scroller = getOutlineScroller()!;
+    const bounds = scroller.getBoundingClientRect();
+    if (
+      s.lastX < bounds.left ||
+      s.lastX >= bounds.right ||
+      s.lastY < bounds.top ||
+      s.lastY >= bounds.bottom
+    )
+      return;
+    const y = s.lastY;
+    let dy = 0;
+    if (y < bounds.top + EDGE)
+      dy = -SCROLL_MAX * (1 - Math.max(0, y - bounds.top) / EDGE);
+    else if (y > bounds.bottom - EDGE)
+      dy = SCROLL_MAX * (1 - Math.max(0, bounds.bottom - y) / EDGE);
+    const horizontal = depsRef.current.getHorizontalScrollEl();
+    const rect = horizontal?.getBoundingClientRect();
+    let dx = 0;
+    if (rect && rect.width < horizontal!.scrollWidth) {
+      if (s.lastX < rect.left + EDGE) {
+        dx = -SCROLL_MAX * (1 - (s.lastX - rect.left) / EDGE);
+      } else if (s.lastX > rect.right - EDGE) {
+        dx = SCROLL_MAX * (1 - (rect.right - s.lastX) / EDGE);
+      }
+    }
+    if (dy !== 0) scroller.scrollBy(0, dy);
+    if (dx !== 0) horizontal?.scrollBy(dx, 0);
+    if (dx !== 0 || dy !== 0) {
+      project(s.lastX, s.lastY);
+    }
+  }, [project]);
+
+  function onMove(e: PointerEvent) {
+    const s = state.current;
+    if (!s || e.pointerId !== s.pointerId) return;
+    s.lastX = e.clientX;
+    s.lastY = e.clientY;
+    if (!s.dragging) {
+      const moved = Math.hypot(e.clientX - s.startX, e.clientY - s.startY);
+      if (moved < THRESHOLD) return;
+      if (
+        s.pointerType === "touch" &&
+        performance.now() - s.pressedAt < TOUCH_HOLD_MS
+      ) {
+        consumed.current = true;
+        cleanup();
+        return;
+      }
+      beginDrag();
+      s.raf = requestAnimationFrame(tickScroll);
+    }
+    e.preventDefault();
+    project(e.clientX, e.clientY);
+  }
+
+  const onTouch = useCallback(
+    (e: TouchEvent) => {
+      const s = state.current;
+      if (!s || s.pointerType !== "touch") return;
+      if (e.touches.length !== 1) {
+        consumed.current = true;
+        cleanup();
+        return;
+      }
+      // Pointer preventDefault cannot stop native touch panning. Take ownership
+      // only after the hold; before it, leave the browser free to scroll. A pan
+      // already claimed by the browser cannot be reclaimed mid-gesture.
+      if (
+        e.type === "touchmove" &&
+        performance.now() - s.pressedAt >= TOUCH_HOLD_MS
+      ) {
+        if (e.cancelable) e.preventDefault();
+        else {
+          consumed.current = true;
+          cleanup();
+        }
+      }
+    },
+    [cleanup],
+  );
+
+  function onUp(e: PointerEvent) {
+    const s = state.current;
+    if (!s || e.pointerId !== s.pointerId) return;
+    if (s.dragging) {
+      consumed.current = true;
+      const pending = s.pending;
+      const external = s.external;
+      const nodeIds = s.nodeIds;
+      const grabbedKey = s.id;
+      const pointerType = s.pointerType;
+      cleanup();
+      if (external) {
+        external.spec.onDrop(
+          external.element,
+          nodeIds,
+          depsRef.current.getPluginContext(),
+        );
+      } else if (pending) {
+        depsRef.current.onMove(
+          grabbedKey,
+          pending.parentId,
+          pending.afterSiblingId,
+          pointerType,
+        );
+      }
+      return;
+    }
+    cleanup();
+  }
+
+  function onCancel(e: PointerEvent) {
+    const s = state.current;
+    if (!s || e.pointerId !== s.pointerId) return;
+    if (s.dragging) consumed.current = true;
+    cleanup();
+  }
+
+  const startDrag = useCallback(
+    (grabbedKey: string, e: ReactPointerEvent) => {
+      if (!e.isPrimary) return;
+      // A fresh press: clear any stale click-suppression.
+      consumed.current = false;
+      // Ignore secondary buttons.
+      if (e.button !== 0 && e.pointerType === "mouse") return;
+      cleanup();
+      // Snapshot selection ownership at press time, before any compatibility
+      // mouse/focus events can run. Pointer cancel and failed async drops leave
+      // the actor itself untouched; this snapshot only drives the gesture.
+      const selected = getSelectionDragSet(grabbedKey);
+      state.current = {
+        id: grabbedKey,
+        nodeIds: selected?.rootIds ?? [instanceIdForKey(grabbedKey)],
+        sourceKeys: selected?.rowKeys ?? [grabbedKey],
+        startX: e.clientX,
+        startY: e.clientY,
+        pointerId: e.pointerId,
+        pointerType: e.pointerType,
+        pressedAt: performance.now(),
+        dragging: false,
+        rows: [],
+        indent: INDENT_FALLBACK,
+        lastX: e.clientX,
+        lastY: e.clientY,
+        pending: null,
+        external: null,
+        indicator: null,
+        pill: null,
+        raf: null,
+        moveHandler: onMove,
+        upHandler: onUp,
+        cancelHandler: onCancel,
+      };
+      document.addEventListener("pointermove", onMove, { passive: false });
+      document.addEventListener("pointerup", onUp);
+      document.addEventListener("pointercancel", onCancel);
+    },
+    // startDrag must stay referentially stable (it rides in the memoized
+    // commands, ADR 0014). onMove/onUp are recreated each render but read only
+    // refs (state.current, depsRef.current), so the mount-render closures behave
+    // identically; cleanup removes the exact stored references. Adding them
+    // would churn startDrag for zero correctness gain.
+    // eslint-disable-next-line react-doctor/exhaustive-deps
+    [],
+  );
+
+  // True when the click that follows pointerup came from a real drag and should
+  // be swallowed (no zoom). Resets itself so the next genuine click zooms.
+  const consumeClick = useCallback(() => {
+    if (consumed.current) {
+      consumed.current = false;
+      return true;
+    }
+    return false;
+  }, []);
+
+  // Preinstall the guarded listener: WebKit propagates blocking touch regions
+  // asynchronously, so registering during pointerdown can be too late for the
+  // first move (WebKit bug 185656). Idle and pre-hold touches still scroll.
+  useEffect(() => {
+    document.addEventListener("touchmove", onTouch, { passive: false });
+    document.addEventListener("touchstart", onTouch, { passive: false });
+    return () => {
+      document.removeEventListener("touchmove", onTouch);
+      document.removeEventListener("touchstart", onTouch);
+      // Also tear down an in-flight drag on route change or editor unmount.
+      cleanup();
+    };
+  }, [cleanup, onTouch]);
+
+  return { startDrag, consumeClick };
+}

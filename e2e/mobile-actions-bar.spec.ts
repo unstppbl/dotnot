@@ -1,0 +1,873 @@
+import { expect, test, type Page } from "@playwright/test";
+
+import {
+  mockKeyboardViewport,
+  placeCaret,
+  seedOutline,
+  STANDARD_TREE,
+  text,
+  type SeedNode,
+} from "./fixtures";
+
+// The mobile actions bar (ADR 0030) is a coarse-pointer, focus-gated toolbar. As
+// in mobile-touch-rows.spec.ts, drive it in a Chromium mobile-emulation context
+// so `(pointer: coarse)` actually matches -- the real signal the bar gates on,
+// not a synthetic class. Geometry is tested with synthetic visualViewport
+// changes. Real keyboard animation and iOS focus-preservation still require the
+// manual iPhone checklist. Also covers focus/blur and each button's action wiring.
+
+const bar = (page: Page) => page.locator("[data-mobile-bar]");
+const btn = (page: Page, label: string) =>
+  bar(page).getByRole("button", { name: label, exact: true });
+async function load(page: Page) {
+  await seedOutline(page, STANDARD_TREE);
+  await page.goto("/");
+  // The first dev-server visit includes Vite's lazy module transforms.
+  await expect(text(page, "alpha")).toBeVisible({ timeout: 15_000 });
+}
+
+// Select the whole text of `id` by setting the DOM Selection directly, as a
+// long-press + handle drag would leave it.
+async function selectAll(page: Page, id: string) {
+  await text(page, id).click();
+  await text(page, id).evaluate((el) => {
+    const sel = window.getSelection()!;
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  });
+}
+
+const ONE: SeedNode[] = [
+  { id: "n", parentId: null, prevSiblingId: null, text: "alphabravo" },
+];
+async function loadOne(page: Page) {
+  await seedOutline(page, ONE);
+  await page.goto("/");
+  await expect(text(page, "n")).toBeVisible({ timeout: 15_000 });
+}
+
+// Focus `id` and drop the caret at absolute offset `col` (copied from
+// enter-split.spec.ts: Home/Arrow keys are unreliable in macOS Chromium
+// contentEditable, and a plain click lands past the text).
+async function caretAt(page: Page, id: string, col: number) {
+  await placeCaret(text(page, id), col);
+}
+
+test.describe("mobile actions bar (coarse pointer)", () => {
+  test.use({
+    hasTouch: true,
+    isMobile: true,
+    viewport: { width: 412, height: 900 },
+  });
+
+  test.beforeEach(async ({ page }) => mockKeyboardViewport(page));
+
+  test("wrapped typing keeps the caret above the keyboard and toolbar", async ({
+    page,
+  }) => {
+    await seedOutline(
+      page,
+      Array.from({ length: 30 }, (_, i) => ({
+        id: `row-${i}`,
+        parentId: null,
+        prevSiblingId: i ? `row-${i - 1}` : null,
+        text: `Writing line ${i}`,
+      })),
+    );
+    await page.goto("/");
+    const input = text(page, "row-10");
+    await placeCaret(input, "end");
+    await expect(bar(page)).toBeVisible();
+    // Start just above the toolbar. The layout viewport stays tall: native
+    // scrolling alone does not know that these next lines are obscured.
+    await input.evaluate((el) => {
+      const bottom =
+        document.querySelector("[data-mobile-bar]")!.getBoundingClientRect()
+          .top - 12;
+      document
+        .querySelector(".outline-scroll")!
+        .scrollBy(0, el.getBoundingClientRect().bottom - bottom);
+    });
+    const before = await page
+      .locator(".outline-scroll")
+      .evaluate((el) => el.scrollTop);
+    for (let i = 0; i < 4; i++) {
+      await page.keyboard.insertText(
+        " More words that wrap onto the next line.",
+      );
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const rect = getSelection()!.getRangeAt(0).getBoundingClientRect();
+            const toolbar = document
+              .querySelector("[data-mobile-bar]")!
+              .getBoundingClientRect();
+            return rect.bottom - toolbar.top;
+          }),
+        )
+        .toBeLessThan(0);
+    }
+    expect(
+      await page.locator(".outline-scroll").evaluate((el) => el.scrollTop),
+    ).toBeGreaterThan(before);
+    await expect(input).toBeFocused();
+    await expect(input).toContainText("Writing line 10 More words");
+
+    // A zoomed title shares the same editing contract, even when the node is
+    // taller than the keyboard-visible band. Revealing its whole box cannot
+    // keep the last line visible.
+    await page
+      .locator('li[data-node-id="row-10"]')
+      .getByRole("button", { name: "Zoom in", exact: true })
+      .click();
+    await expect(page).toHaveURL(/\/row-10$/);
+    const title = page.locator('h2 .node-text[contenteditable="true"]');
+    await placeCaret(title, "end");
+    await page.keyboard.insertText(
+      " A longer thought that keeps wrapping.".repeat(30),
+    );
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const caret = getSelection()!.getRangeAt(0).getBoundingClientRect();
+          const toolbar = document
+            .querySelector("[data-mobile-bar]")!
+            .getBoundingClientRect();
+          return caret.bottom < toolbar.top && caret.top > 0;
+        }),
+      )
+      .toBe(true);
+    await expect(title).toBeFocused();
+
+    // The last row must remain reachable after its virtual height grows, even
+    // in landscape where the keyboard takes more than half the layout height.
+    // Tap the empty corner to reveal navigation without activating a control.
+    await page.touchscreen.tap(2, 2);
+    await page
+      .getByRole("button", { name: "Back to Home", exact: true })
+      .click();
+    await expect(page).toHaveURL(/\/$/);
+    await page.locator(".outline-list").waitFor();
+    for (const viewport of [
+      { width: 1024, height: 768, visible: 368 },
+      { width: 844, height: 390, visible: 180 },
+      // Leave one text line between normal-flow chrome and the toolbar.
+      // Smaller bands require native viewport panning, absent from this mock.
+      { width: 874, height: 338, visible: 144 },
+    ]) {
+      await page.setViewportSize(viewport);
+      await page.evaluate((height) => {
+        Object.defineProperty(visualViewport!, "height", {
+          configurable: true,
+          value: height,
+        });
+        visualViewport!.dispatchEvent(new Event("resize"));
+        const scroller = document.querySelector(".outline-scroll")!;
+        scroller.scrollTo(0, scroller.scrollHeight);
+      }, viewport.visible);
+      const last = text(page, "row-29");
+      await placeCaret(last, "end");
+      await expect(bar(page)).toBeVisible();
+      await page.keyboard.insertText(
+        " More typing wraps at the bottom of this outline.".repeat(8),
+      );
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const caret = getSelection()!.getRangeAt(0).getBoundingClientRect();
+            const toolbar = document
+              .querySelector("[data-mobile-bar]")
+              ?.getBoundingClientRect();
+            const header = document
+              .querySelector(".outline-chrome")!
+              .getBoundingClientRect();
+            return (
+              !!toolbar &&
+              caret.bottom < toolbar.top &&
+              caret.top > Math.max(0, header.bottom)
+            );
+          }),
+        )
+        .toBe(true);
+      await expect(last).toBeFocused();
+    }
+  });
+
+  test("opening the keyboard reveals the caret after the toolbar mounts", async ({
+    page,
+  }) => {
+    await seedOutline(
+      page,
+      Array.from({ length: 40 }, (_, i) => ({
+        id: `row-${i}`,
+        parentId: null,
+        prevSiblingId: i ? `row-${i - 1}` : null,
+        text: `Writing line ${i}`,
+      })),
+    );
+    await page.goto("/");
+    await page.evaluate(() => {
+      Object.defineProperty(visualViewport!, "height", {
+        configurable: true,
+        value: innerHeight,
+      });
+      visualViewport!.dispatchEvent(new Event("resize"));
+    });
+    const input = text(page, "row-20");
+    await placeCaret(input, 5);
+    await expect(bar(page)).toHaveCount(0);
+    await input.evaluate(() => {
+      document
+        .querySelector(".outline-scroll")!
+        .scrollBy(
+          0,
+          getSelection()!.getRangeAt(0).getBoundingClientRect().bottom - 525,
+        );
+      Object.defineProperty(visualViewport!, "height", {
+        configurable: true,
+        value: 537,
+      });
+      visualViewport!.dispatchEvent(new Event("resize"));
+    });
+    await expect(bar(page)).toBeVisible();
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const caret = getSelection()!.getRangeAt(0).getBoundingClientRect();
+          const toolbar = document
+            .querySelector("[data-mobile-bar]")!
+            .getBoundingClientRect();
+          return caret.bottom < toolbar.top && caret.top > 0;
+        }),
+      )
+      .toBe(true);
+    await expect(input).toBeFocused();
+  });
+
+  test("keyboard dismissal hides actions even when the input retains DOM focus", async ({
+    page,
+  }) => {
+    await load(page);
+    await page.evaluate(() => {
+      Object.defineProperty(visualViewport!, "height", {
+        configurable: true,
+        value: 900,
+      });
+      visualViewport!.dispatchEvent(new Event("resize"));
+    });
+    await text(page, "alpha").tap();
+    // DOM focus before the keyboard opens (or with a hardware keyboard) is not
+    // enough. A small browser-chrome change is not a keyboard either.
+    await expect(text(page, "alpha")).toBeFocused();
+    await expect(bar(page)).toHaveCount(0);
+    await page.evaluate(() => {
+      Object.defineProperty(visualViewport!, "height", {
+        configurable: true,
+        value: 850,
+      });
+      visualViewport!.dispatchEvent(new Event("resize"));
+    });
+    await expect(bar(page)).toHaveCount(0);
+    await page.evaluate(() => {
+      Object.defineProperty(visualViewport!, "height", {
+        configurable: true,
+        value: 537,
+      });
+      visualViewport!.dispatchEvent(new Event("resize"));
+    });
+    await expect(bar(page)).toBeVisible();
+    const chromeTop = await page
+      .locator(".outline-chrome")
+      .evaluate((el) => el.getBoundingClientRect().top);
+    expect(
+      await page
+        .locator(".outline-shell")
+        .evaluate((el) => el.getBoundingClientRect().height),
+    ).toBe(900);
+    await page.evaluate(() => {
+      Object.defineProperty(visualViewport!, "height", {
+        configurable: true,
+        value: 900,
+      });
+      visualViewport!.dispatchEvent(new Event("resize"));
+    });
+    await expect(text(page, "alpha")).toBeFocused();
+    await expect(text(page, "alpha")).toBeInViewport();
+    expect(
+      await page
+        .locator(".outline-chrome")
+        .evaluate((el) => el.getBoundingClientRect().top),
+    ).toBe(chromeTop);
+    await expect(bar(page)).toHaveCount(0);
+    // Pinch zoom without a keyboard must not bring it back.
+    await page.evaluate(() => {
+      Object.defineProperties(visualViewport!, {
+        height: { configurable: true, value: 450 },
+        scale: { configurable: true, value: 2 },
+      });
+      visualViewport!.dispatchEvent(new Event("resize"));
+    });
+    await expect(bar(page)).toHaveCount(0);
+    // Reopening the keyboard on the same input has no new focusin event.
+    await page.evaluate(() => {
+      Object.defineProperties(visualViewport!, {
+        height: { configurable: true, value: 537 },
+        scale: { configurable: true, value: 1 },
+      });
+      visualViewport!.dispatchEvent(new Event("resize"));
+    });
+    await expect(bar(page)).toBeVisible();
+    await page.keyboard.insertText(" resumed");
+    await expect(text(page, "alpha")).toContainText("resumed");
+  });
+
+  test("virtualizing away the input hides actions and refocusing restores them", async ({
+    page,
+  }) => {
+    await seedOutline(
+      page,
+      Array.from({ length: 500 }, (_, i) => ({
+        id: `row-${i}`,
+        parentId: null,
+        prevSiblingId: i ? `row-${i - 1}` : null,
+        text: `Reading row ${i}`,
+      })),
+    );
+    await page.goto("/");
+    await text(page, "row-0").tap();
+    await page.evaluate(() => {
+      Object.defineProperty(visualViewport!, "height", {
+        configurable: true,
+        value: 537,
+      });
+      visualViewport!.dispatchEvent(new Event("resize"));
+    });
+    await expect(bar(page)).toBeVisible();
+    await page
+      .locator(".outline-scroll")
+      .evaluate((el) => el.scrollTo(0, 20000));
+    await expect(text(page, "row-0")).toHaveCount(0);
+    expect(
+      await page.evaluate(() => document.activeElement === document.body),
+    ).toBe(true);
+    await expect(bar(page)).toHaveCount(0);
+    await page.locator(".outline-scroll").evaluate((el) => el.scrollTo(0, 0));
+    await text(page, "row-0").tap();
+    await expect(text(page, "row-0")).toBeFocused();
+    await expect(bar(page)).toBeVisible();
+    await placeCaret(text(page, "row-0"), "end");
+    await page.keyboard.press("Shift+ArrowDown");
+    await expect(bar(page)).toHaveCount(0);
+    await expect(page.locator('li[data-node-id="row-0"]')).toHaveAttribute(
+      "data-selected",
+      "single",
+    );
+    await page.keyboard.press("Escape");
+    await expect(text(page, "row-0")).toBeFocused();
+    await expect(bar(page)).toBeVisible();
+  });
+
+  test("on a coarse pointer the bar appears only while a bullet is focused", async ({
+    page,
+  }) => {
+    await load(page);
+    const coarse = await page.evaluate(
+      () => window.matchMedia("(pointer: coarse)").matches,
+    );
+    // If this fails the visibility assertions below would test the desktop path.
+    expect(coarse).toBe(true);
+    // Nothing focused on load -> no bar.
+    await expect(bar(page)).toHaveCount(0);
+    await text(page, "alpha").click();
+    await expect(bar(page)).toBeVisible();
+    // Explicit blur must hide the bar even before the keyboard has resized.
+    // SAFETY: text() selects the outline row's contentEditable HTML span.
+    await text(page, "alpha").evaluate((el) => (el as HTMLElement).blur());
+    await expect(bar(page)).toHaveCount(0);
+  });
+
+  test("fits the visible height and follows viewport panning without blocking editing", async ({
+    page,
+  }) => {
+    await load(page);
+    await text(page, "alpha").click();
+    await expect(bar(page)).toBeVisible();
+
+    // Shrink ONLY the visual viewport, as a keyboard does on current Chrome/iOS.
+    // Resizing the browser window instead would miss the original failure mode.
+    await page.evaluate(() => {
+      const vv = window.visualViewport!;
+      Object.defineProperty(vv, "height", { configurable: true, value: 537 });
+      vv.dispatchEvent(new Event("resize"));
+    });
+    await expect
+      .poll(() => bar(page).evaluate((el) => el.getBoundingClientRect().bottom))
+      .toBe(531); // 537px visible height minus the pill's existing 6px margin.
+
+    // A scroll event changes the top edge without changing the visible height.
+    await page.evaluate(() => {
+      const vv = window.visualViewport!;
+      Object.defineProperty(vv, "offsetTop", {
+        configurable: true,
+        value: 103,
+      });
+      vv.dispatchEvent(new Event("scroll"));
+    });
+    await expect
+      .poll(() => bar(page).evaluate((el) => el.getBoundingClientRect().bottom))
+      .toBe(634); // 103 + 537 - 6, not just height and not height minus offset.
+    // The full-height positioning frame must not intercept taps on other nodes.
+    await text(page, "alpha-2").click();
+    await expect(text(page, "alpha-2")).toBeFocused();
+    await btn(page, "Indent").click();
+    await expect(text(page, "alpha-2")).toBeFocused();
+    await expect(
+      page.locator('li[data-node-id="alpha-2"][data-parent-id="alpha-1"]'),
+    ).toBeVisible();
+
+    // Closing the keyboard removes the bar even if DOM focus stays put.
+    await page.evaluate(() => {
+      const vv = window.visualViewport!;
+      Object.defineProperty(vv, "height", { configurable: true, value: 900 });
+      Object.defineProperty(vv, "offsetTop", { configurable: true, value: 0 });
+      vv.dispatchEvent(new Event("resize"));
+    });
+    await expect(text(page, "alpha-2")).toBeFocused();
+    await expect(bar(page)).toHaveCount(0);
+  });
+
+  test("pinch zoom does not masquerade as a keyboard resize or pan", async ({
+    page,
+  }) => {
+    await load(page);
+    await text(page, "alpha").click();
+    await expect(bar(page)).toBeVisible();
+    await page.evaluate(() => {
+      const vv = window.visualViewport!;
+      Object.defineProperties(vv, {
+        height: { configurable: true, value: 300 },
+        offsetTop: { configurable: true, value: 71 },
+        scale: { configurable: true, value: 2 },
+      });
+      vv.dispatchEvent(new Event("resize"));
+      vv.dispatchEvent(new Event("scroll"));
+    });
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+    );
+    expect(
+      await bar(page).evaluate((el) => el.getBoundingClientRect().bottom),
+    ).toBe(594); // Keyboard-open frame is unchanged by pinch zoom.
+  });
+
+  test("an embedded outline retains focus-only actions without a distinct visual viewport", async ({
+    page,
+    baseURL,
+  }) => {
+    await seedOutline(page, STANDARD_TREE);
+    // An iframe viewport equals its layout viewport, even when the containing
+    // page's keyboard is open. Use a local host page for the embedded app.
+    const host = `${baseURL}/toolbar-frame`;
+    await page.route(host, (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body: `<meta name="viewport" content="width=device-width,initial-scale=1"><iframe title="Outline demo" src="${baseURL}/" style="width:380px;height:700px"></iframe>`,
+      }),
+    );
+    await page.goto(host);
+    const frame = page.frameLocator('iframe[title="Outline demo"]');
+    const input = frame.locator('li[data-node-id="alpha"] .node-text');
+    const toolbar = frame.getByRole("toolbar", { name: "Editing actions" });
+    await input.evaluate(() => {
+      Object.defineProperty(visualViewport!, "height", {
+        configurable: true,
+        get: () => innerHeight,
+      });
+      visualViewport!.dispatchEvent(new Event("resize"));
+    });
+    await input.tap();
+    await expect(input).toBeFocused();
+    await expect(toolbar).toBeVisible();
+    await placeCaret(input, "end");
+    await page.keyboard.insertText(" A long embedded thought.".repeat(40));
+    await expect
+      .poll(() =>
+        input.evaluate(() => {
+          const caret = getSelection()!.getRangeAt(0).getBoundingClientRect();
+          const toolbar = document
+            .querySelector("[data-mobile-bar]")!
+            .getBoundingClientRect();
+          return caret.bottom < toolbar.top && caret.top > 0;
+        }),
+      )
+      .toBe(true);
+    // SAFETY: .node-text selects the outline's HTML contenteditable span.
+    await input.evaluate((el) => (el as HTMLElement).blur());
+    await expect(toolbar).toHaveCount(0);
+  });
+
+  test("falls back to window resizing without the Visual Viewport API", async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(window, "visualViewport", { value: null });
+    });
+    await load(page);
+    await text(page, "alpha").click();
+    await expect(bar(page)).toBeVisible();
+    await page.setViewportSize({ width: 412, height: 700 });
+    await expect
+      .poll(() => bar(page).evaluate((el) => el.getBoundingClientRect().bottom))
+      .toBe(694);
+  });
+
+  test("indent then outdent restructure the focused bullet", async ({
+    page,
+  }) => {
+    await load(page);
+    // alpha-2 has a previous sibling (alpha-1), so it can indent under it.
+    await text(page, "alpha-2").click();
+    await btn(page, "Indent").click();
+    await expect(
+      page.locator('li[data-node-id="alpha-2"][data-parent-id="alpha-1"]'),
+    ).toBeVisible();
+
+    // Outdent walks it back out to a child of alpha.
+    await btn(page, "Outdent").click();
+    await expect(
+      page.locator('li[data-node-id="alpha-2"][data-parent-id="alpha"]'),
+    ).toBeVisible();
+  });
+
+  test("undo/redo replay the last structural edit", async ({ page }) => {
+    await load(page);
+    await text(page, "alpha-2").click();
+    await btn(page, "Indent").click();
+    const indented = page.locator(
+      'li[data-node-id="alpha-2"][data-parent-id="alpha-1"]',
+    );
+    await expect(indented).toBeVisible();
+
+    // Undo puts it back under alpha; redo re-applies the indent.
+    await btn(page, "Undo indent").click();
+    await expect(indented).toHaveCount(0);
+    await expect(
+      page.locator('li[data-node-id="alpha-2"][data-parent-id="alpha"]'),
+    ).toBeVisible();
+
+    await btn(page, "Redo indent").click();
+    await expect(indented).toBeVisible();
+  });
+
+  test("complete toggles the focused bullet's completion", async ({ page }) => {
+    await load(page);
+    await text(page, "alpha").click();
+    await expect(text(page, "alpha")).not.toHaveAttribute(
+      "data-completed",
+      "true",
+    );
+    await btn(page, "Toggle complete").click();
+    await expect(text(page, "alpha")).toHaveAttribute("data-completed", "true");
+    // Toggling again un-completes it (un-mark is always allowed).
+    await btn(page, "Toggle complete").click();
+    await expect(text(page, "alpha")).not.toHaveAttribute(
+      "data-completed",
+      "true",
+    );
+  });
+
+  test("the slash button inserts / and opens the command menu", async ({
+    page,
+  }) => {
+    await load(page);
+    // Caret at the START so the inserted "/" is at offset 0 and detectSlash fires
+    // (it triggers only when the "/" leads the line or follows whitespace).
+    await caretAt(page, "alpha", 0);
+    await btn(page, "Command menu").click();
+    await expect(page.locator('[role="listbox"]')).toBeVisible();
+  });
+
+  test("a text selection swaps in the format buttons; collapsing swaps back", async ({
+    page,
+  }) => {
+    // ADR 0069: one bar, two modes, never both.
+    await loadOne(page);
+    await text(page, "n").click();
+    await expect(btn(page, "Indent")).toBeVisible();
+    await expect(btn(page, "Bold")).toHaveCount(0);
+
+    await selectAll(page, "n");
+    await expect(bar(page)).toHaveAttribute("data-mode", "format");
+    for (const label of [
+      "Bold",
+      "Italic",
+      "Strikethrough",
+      "Underline",
+      "Highlight",
+      "Spoiler",
+      "Link",
+    ])
+      await expect(btn(page, label)).toBeVisible();
+    await expect(btn(page, "Indent")).toHaveCount(0);
+
+    await text(page, "n").evaluate(() =>
+      window.getSelection()!.collapseToEnd(),
+    );
+    await expect(bar(page)).toHaveAttribute("data-mode", "edit");
+    await expect(btn(page, "Indent")).toBeVisible();
+  });
+
+  test("bold toggles on and off with a lit state, keeping the selection", async ({
+    page,
+  }) => {
+    await loadOne(page);
+    await selectAll(page, "n");
+    await btn(page, "Bold").click();
+    await expect(text(page, "n").locator("strong")).toHaveText("alphabravo");
+    await expect(btn(page, "Bold")).toHaveAttribute("aria-pressed", "true");
+
+    // The re-press is the format's undo.
+    await btn(page, "Bold").click();
+    await expect(text(page, "n").locator("strong")).toHaveCount(0);
+    await expect(text(page, "n")).toHaveText("alphabravo");
+    await expect(btn(page, "Bold")).toHaveAttribute("aria-pressed", "false");
+  });
+
+  test("a press that collapses the selection still formats what it landed on", async ({
+    page,
+  }) => {
+    // Touch WebKit may drop a range on a tap outside it. Simulate that after
+    // the bar's own pointerdown handler has run (a bubble-phase document
+    // listener fires after React's root listeners), then hold the press past
+    // a few frames so the live read flips before the finger lifts.
+    await loadOne(page);
+    await selectAll(page, "n");
+    await expect(bar(page)).toHaveAttribute("data-mode", "format");
+    await page.evaluate(() =>
+      document.addEventListener(
+        "pointerdown",
+        () => window.getSelection()?.collapseToEnd(),
+        { once: true },
+      ),
+    );
+    const box = (await btn(page, "Italic").boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await expect
+      .poll(() => page.evaluate(() => window.getSelection()?.isCollapsed))
+      .toBe(true);
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        ),
+    );
+    // Held: the button under the finger is still Italic, not an edit action.
+    await expect(bar(page)).toHaveAttribute("data-mode", "format");
+    await page.mouse.up();
+    await expect(text(page, "n").locator("em")).toHaveText("alphabravo");
+
+    // Lifting outside the bar releases format mode without applying a format.
+    const boldBox = (await btn(page, "Bold").boundingBox())!;
+    await page.mouse.move(
+      boldBox.x + boldBox.width / 2,
+      boldBox.y + boldBox.height / 2,
+    );
+    await page.mouse.down();
+    await text(page, "n").evaluate(() =>
+      window.getSelection()!.collapseToEnd(),
+    );
+    await page.mouse.move(5, 5);
+    await page.mouse.up();
+    await expect(bar(page)).toHaveAttribute("data-mode", "edit");
+    await expect(text(page, "n").locator("strong")).toHaveCount(0);
+
+    // Source offsets inside a revealed token must survive the token refolding.
+    await seedOutline(page, [
+      { id: "n", parentId: null, prevSiblingId: null, text: "**hello** tail" },
+    ]);
+    await page.goto("/");
+    await placeCaret(text(page, "n"), 4);
+    // Focus reveals the folded atom on the next frame. Selecting it before
+    // that reveal tests a selected chip, not the editable interior below.
+    await expect(text(page, "n").locator("strong")).not.toHaveAttribute(
+      "contenteditable",
+      "false",
+    );
+    await text(page, "n")
+      .locator("strong")
+      .evaluate((el) => {
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        const sel = window.getSelection()!;
+        sel.removeAllRanges();
+        sel.addRange(range);
+      });
+    await expect(btn(page, "Bold")).toHaveAttribute("aria-pressed", "true");
+    await page.evaluate(() =>
+      document.addEventListener(
+        "pointerdown",
+        () => {
+          const el = document.activeElement!;
+          const range = document.createRange();
+          range.selectNodeContents(el);
+          range.collapse(false);
+          const sel = window.getSelection()!;
+          sel.removeAllRanges();
+          sel.addRange(range);
+        },
+        { once: true },
+      ),
+    );
+    const toggleBox = (await btn(page, "Bold").boundingBox())!;
+    await page.mouse.move(
+      toggleBox.x + toggleBox.width / 2,
+      toggleBox.y + toggleBox.height / 2,
+    );
+    await page.mouse.down();
+    await expect(
+      text(page, "n").locator('strong[contenteditable="false"]'),
+    ).toHaveCount(1);
+    await page.mouse.up();
+    await expect(text(page, "n")).toHaveText("hello tail");
+    await expect(text(page, "n").locator("strong")).toHaveCount(0);
+  });
+
+  test("highlight toggles off and stays in format mode", async ({ page }) => {
+    await loadOne(page);
+    await selectAll(page, "n");
+    await btn(page, "Highlight").click();
+    await expect(text(page, "n").locator("mark[data-highlight]")).toHaveCount(
+      1,
+    );
+    await expect(btn(page, "Highlight")).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await btn(page, "Highlight").click();
+    await expect(text(page, "n").locator("mark[data-highlight]")).toHaveCount(
+      0,
+    );
+    await expect(bar(page)).toHaveAttribute("data-mode", "format");
+    await expect(btn(page, "Highlight")).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+  });
+
+  test("link opens a sheet with the url focused, and creates the link", async ({
+    page,
+  }) => {
+    await loadOne(page);
+    await selectAll(page, "n");
+    await btn(page, "Link").click();
+    const sheet = page.getByRole("dialog", { name: "Add link", exact: true });
+    await expect(sheet).toBeVisible();
+    // Wait out the entry animation before tapping inside the sheet.
+    const done = sheet.getByRole("button", { name: "Done" });
+    await expect
+      .poll(() =>
+        done.evaluate(
+          (el) => el.getBoundingClientRect().bottom <= window.innerHeight,
+        ),
+      )
+      .toBe(true);
+    const url = sheet.getByLabel("Link URL");
+    await expect(url).toBeFocused();
+    await expect(bar(page)).toHaveCount(0);
+    await url.fill("https://example.com");
+    await expect(sheet).toHaveAccessibleName("Add link");
+    await done.click();
+    // Done animates the sheet out, then the overlay unmounts.
+    await expect(sheet).toHaveCount(0);
+    await expect(text(page, "n")).toBeFocused();
+    await expect(bar(page)).toBeVisible();
+    // The caret is back inside the new link, so it renders revealed: the label
+    // as text and the url as a chip.
+    await expect(text(page, "n").locator(".link-label")).toHaveText(
+      "alphabravo",
+    );
+    await expect(
+      text(page, "n").locator('.link-url-chip[data-src="https://example.com"]'),
+    ).toHaveCount(1);
+  });
+});
+
+test("a fine pointer never shows mobile actions, even in a narrow keyboard-sized viewport", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 412, height: 900 });
+  await mockKeyboardViewport(page);
+  await load(page);
+  await text(page, "alpha").click();
+  expect(await page.evaluate(() => matchMedia("(pointer: fine)").matches)).toBe(
+    true,
+  );
+  await expect(text(page, "alpha")).toBeFocused();
+  await expect(bar(page)).toHaveCount(0);
+});
+
+// Native formatting input (ADR 0069): the iOS selection menu's Format items
+// arrive as `beforeinput`. They become marker toggles; every other `format*`
+// input is cancelled so the browser never injects HTML into the source.
+test("native format input toggles markers and never injects HTML", async ({
+  page,
+}) => {
+  await seedOutline(page, [
+    ...ONE,
+    {
+      id: "other",
+      parentId: null,
+      prevSiblingId: "n",
+      text: "untouched",
+    },
+  ]);
+  await page.goto("/");
+  await expect(text(page, "n")).toBeVisible({ timeout: 15_000 });
+  const fire = (inputType: string) =>
+    text(page, "n").evaluate(
+      (el, type) =>
+        !el.dispatchEvent(
+          new InputEvent("beforeinput", {
+            inputType: type,
+            bubbles: true,
+            cancelable: true,
+          }),
+        ),
+      inputType,
+    );
+
+  await placeCaret(text(page, "n"), "end");
+  await text(page, "n").evaluate((el) => {
+    const other = document.querySelector(
+      'li[data-node-id="other"] .node-text',
+    )!;
+    const range = document.createRange();
+    range.setStart(el.firstChild!, 2);
+    range.setEnd(other.firstChild!, 4);
+    const sel = window.getSelection()!;
+    sel.removeAllRanges();
+    sel.addRange(range);
+  });
+  expect(await fire("formatBold")).toBe(true);
+  await expect(text(page, "n")).toHaveText("alphabravo");
+  await expect(text(page, "other")).toHaveText("untouched");
+
+  await placeCaret(text(page, "n"), "end");
+  await page.keyboard.type("tail");
+  await selectAll(page, "n");
+  expect(await fire("formatBold")).toBe(true);
+  await expect(text(page, "n").locator("strong")).toHaveText("alphabravotail");
+
+  // Chromium's InputEvent constructor drops some types (formatFontColor),
+  // so probe the cancel path with one it keeps.
+  expect(await fire("formatSuperscript")).toBe(true);
+  await expect(text(page, "n").locator("sup")).toHaveCount(0);
+  await expect(text(page, "n").locator("strong")).toHaveText("alphabravotail");
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect(text(page, "n")).toHaveText("alphabravotail");
+  await expect(text(page, "n").locator("strong")).toHaveCount(0);
+});

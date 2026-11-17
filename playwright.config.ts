@@ -1,0 +1,117 @@
+import { defineConfig, devices } from "@playwright/test";
+import { fileURLToPath } from "node:url";
+
+// Chromium and headless by default. These are behavioral tests (caret/visual-line
+// navigation needs a real layout engine). Engine-specific regressions can override
+// browserName: typing-suggestions-webkit covers touch suggestion selection. Name
+// such a spec `*-webkit.spec.ts`, which puts it in the engine-webkit project.
+// `E2E_PORT` exists for the one case a fixed port can't serve: two agent
+// worktrees running the suite at once. Give the second one its own port.
+const PORT = Number(process.env.E2E_PORT ?? 3210);
+const ROOT = fileURLToPath(new URL(".", import.meta.url));
+const VITE = fileURLToPath(
+  new URL("./node_modules/vite/bin/vite.js", import.meta.url),
+);
+const BUNDLE = fileURLToPath(
+  new URL("./scripts/e2e-bundle.ts", import.meta.url),
+);
+// The suite runs against a development-mode bundle (ADR 0091). `E2E_SERVER=dev`
+// drives the Vite development server instead, for a spec you are iterating on
+// against source you keep editing.
+const SERVER = process.env.E2E_SERVER ?? "bundle";
+if (SERVER !== "bundle" && SERVER !== "dev") {
+  throw new Error(`E2E_SERVER must be "bundle" or "dev", not "${SERVER}"`);
+}
+
+// Real Worker suites own their backend rather than using this Vite server.
+const REAL_WORKER_SPECS = "worker-browser/**";
+const ENGINE_WEBKIT_SPECS = "*-webkit.spec.ts";
+
+export default defineConfig({
+  testDir: "./e2e",
+  testIgnore: [REAL_WORKER_SPECS],
+  fullyParallel: true,
+  // Each worker owns a browser in addition to the shared Vite server. Leave
+  // room for the agent and other checks on a medium Orb (4 CPUs, 8 GB RAM).
+  // Larger machines can opt in to more parallelism with --workers=N.
+  workers: 1,
+  forbidOnly: !!process.env.CI,
+  retries: process.env.CI ? 1 : 0,
+  reporter: process.env.CI ? "github" : "list",
+  use: {
+    baseURL: `http://localhost:${PORT}`,
+    trace: "on-first-retry",
+  },
+  projects: [
+    {
+      name: "chromium",
+      // A project's testIgnore replaces the top-level one, so repeat it.
+      testIgnore: [REAL_WORKER_SPECS, ENGINE_WEBKIT_SPECS],
+      use: { ...devices["Desktop Chrome"] },
+    },
+    {
+      // These specs set `browserName: "webkit"` themselves. Their own project
+      // keeps them in CI's WebKit lane; the Chromium shards install no WebKit.
+      name: "engine-webkit",
+      testMatch: ENGINE_WEBKIT_SPECS,
+      use: { ...devices["Desktop Chrome"] },
+    },
+    {
+      name: "selection-menu-webkit",
+      testMatch: "node-multi-select.spec.ts",
+      grep: /selection menu keyboard|actions menu: Move|filtered.*mirror/,
+      // Keep the same desktop identity: Linux WebKit's default macOS UA makes
+      // Mod resolve to Meta while Playwright's ControlOrMeta sends Control.
+      use: { ...devices["Desktop Chrome"], browserName: "webkit" },
+    },
+    {
+      name: "quick-add-webkit",
+      testMatch: "quick-add.spec.ts",
+      grep: /quick-add mobile FAB/,
+      use: { ...devices["iPhone 13"] },
+    },
+    {
+      name: "mobile-toolbar-webkit",
+      testMatch: "mobile-actions-bar.spec.ts",
+      grep: /mobile actions bar \(coarse pointer\)/,
+      use: { ...devices["iPhone 13"] },
+    },
+    {
+      name: "day-stream-webkit",
+      testMatch: "day-stream.spec.ts",
+      grep: /day navigation on touch/,
+      use: { ...devices["iPhone 13"] },
+    },
+    {
+      name: "mobile-navigation-webkit",
+      testMatch: "mobile-navigation.spec.ts",
+      use: { ...devices["iPhone 13"] },
+    },
+    {
+      name: "writing-chrome-webkit",
+      testMatch: "writing-chrome.spec.ts",
+      grep: /touch writing/,
+      use: { ...devices["iPhone 13"] },
+    },
+  ],
+  // Always boot our own server, NEVER adopt one already on the port.
+  // `dev`/`dev:web` serve :3000, so the only thing that ever answers on this
+  // port is another Playwright run -- a zombie from an aborted suite, or a
+  // sibling worktree serving DIFFERENT source. Reusing either runs the tests
+  // against code that isn't in front of you, and the failures are shaped
+  // exactly like real regressions. Playwright throws on a busy port instead,
+  // which is the loud version of the same fact.
+  webServer: {
+    // Use the installed entry point: Bun's nested script launch can lose .bin
+    // from PATH in an orb.
+    command:
+      SERVER === "dev"
+        ? `"${process.execPath}" "${VITE}" dev --port ${PORT} --strictPort`
+        : `bun "${BUNDLE}"`,
+    env: { E2E_PORT: String(PORT) },
+    cwd: ROOT,
+    url: `http://localhost:${PORT}`,
+    reuseExistingServer: false,
+    timeout: 120_000,
+  },
+});

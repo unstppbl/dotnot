@@ -1,0 +1,209 @@
+import { expect, test } from "@playwright/test";
+
+import { openSeededOutline, seedOutline, STANDARD_TREE } from "./fixtures";
+
+test.use({
+  viewport: { width: 390, height: 844 },
+  hasTouch: true,
+  isMobile: true,
+});
+
+test("mobile destinations, search, capture, and filter use existing app behavior", async ({
+  page,
+}) => {
+  await seedOutline(page, STANDARD_TREE);
+  await openSeededOutline(page, { anchorId: "alpha" });
+  await expect(
+    page.locator(".outline-header").getByText("Home", { exact: true }),
+  ).toHaveCount(0);
+  const nav = page.getByRole("navigation", { name: "Outline navigation" });
+  await expect(nav.getByRole("link")).toHaveCount(2);
+  await expect(
+    nav.getByRole("link", { name: "Home", exact: true }),
+  ).toHaveAttribute("aria-current", "page");
+  await page.getByRole("button", { name: "Search", exact: true }).tap();
+  const search = page.getByRole("combobox");
+  await search.fill("Alpha");
+  await page
+    .getByRole("option", { name: /Alpha/ })
+    .first()
+    .getByText("Alpha", { exact: true })
+    .tap();
+  await expect(page).toHaveURL(/\/alpha$/);
+  await expect(nav.locator("[aria-current=page]")).toHaveCount(0);
+
+  await nav.getByRole("link", { name: "Today", exact: true }).tap();
+  await expect(
+    nav.getByRole("link", { name: "Today", exact: true }),
+  ).toHaveAttribute("aria-current", "page");
+  const todayUrl = page.url();
+  await nav.getByRole("link", { name: "Home", exact: true }).tap();
+  await expect(page).toHaveURL(/\/$/);
+  await page.getByRole("button", { name: "Quick add", exact: true }).tap();
+  const capture = page.getByRole("textbox", { name: "Quick add", exact: true });
+  await expect(capture).toBeFocused();
+  await page.keyboard.insertText("Captured from the mobile toolbar");
+  await page.keyboard.press("Enter");
+  await expect(
+    page.getByRole("dialog", { name: "Quick add", exact: true }),
+  ).toBeHidden();
+  await nav.getByRole("link", { name: "Today", exact: true }).tap();
+  await expect(page).toHaveURL(todayUrl);
+  await expect(
+    page.locator("li[data-node-id] > .outline-row", {
+      hasText: "Captured from the mobile toolbar",
+    }),
+  ).toBeVisible();
+
+  // View options and Account and help share the narrow-screen More menu.
+  await page.getByRole("button", { name: "More", exact: true }).tap();
+  await expect(
+    page.getByRole("dialog", { name: "More", exact: true }),
+  ).toBeVisible();
+  await expect
+    .poll(() =>
+      page
+        .locator(".lg-sheet")
+        .evaluate((el) => Math.round(el.getBoundingClientRect().bottom)),
+    )
+    .toBe(836);
+  await expect(
+    page.getByRole("menuitem", { name: "Sign out", exact: true }),
+  ).toBeAttached();
+  // Search this view opens Find on this node; Show in outline filters it.
+  await page
+    .getByRole("menuitem", { name: "Search this view", exact: true })
+    .tap();
+  const find = page.getByRole("combobox", { name: "Find nodes and actions" });
+  await expect(find).toBeFocused();
+  await expect(
+    page.getByRole("button", { name: /^This node/ }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await find.fill("Captured");
+  await page.getByRole("button", { name: /^Show in outline/ }).tap();
+  await expect(page).toHaveURL(/q=Captured/);
+  await expect(page.locator("[data-filter-pill]")).toHaveText(
+    "Capturedin this node",
+  );
+});
+
+test("Find menus and overlay handoffs work inside the native phone sheet", async ({
+  page,
+}) => {
+  await seedOutline(page, STANDARD_TREE);
+  await openSeededOutline(page, { anchorId: "alpha" });
+  const searchButton = page.getByRole("button", {
+    name: "Search",
+    exact: true,
+  });
+  await searchButton.tap();
+  const find = page.getByRole("combobox", { name: "Find nodes and actions" });
+  await page.getByRole("button", { name: "Completed", exact: true }).tap();
+  await page
+    .getByRole("menuitemradio", { name: "Not completed", exact: true })
+    .tap();
+  await expect(find).toHaveValue("-is:complete");
+  await page.getByRole("button", { name: "Not completed", exact: true }).tap();
+  await page.getByRole("menuitemradio", { name: "Any", exact: true }).tap();
+  await expect(find).toHaveValue("");
+  await find.fill("quick add");
+  await page.getByRole("option", { name: /Quick add/ }).tap();
+  const capture = page.getByRole("textbox", { name: "Quick add", exact: true });
+  await expect(capture).toBeFocused();
+  await capture.fill("A thought after Find closes");
+  await expect(capture).toHaveText("A thought after Find closes");
+  await expect(page.locator("dialog[open]").filter({ has: find })).toHaveCount(
+    0,
+  );
+  await capture.press("Escape");
+  await searchButton.tap();
+  await find.fill("Alpha");
+  await page
+    .locator('[data-result-id="alpha"]')
+    .getByRole("button", { name: "Node actions" })
+    .tap();
+  await page.getByRole("option", { name: /^Move to/ }).tap();
+  const move = page.getByRole("dialog", { name: "Move node", exact: true });
+  await expect(move.getByRole("combobox")).toBeFocused();
+  await move.getByRole("combobox").fill("Bravo");
+  await expect(move.getByRole("option", { name: /Bravo/ })).toBeVisible();
+  await move.getByRole("combobox").press("Escape");
+  await searchButton.tap();
+  await find.fill("tomorrow");
+  await page.getByRole("option", { name: /tomorrow/i }).tap();
+  await expect(page).not.toHaveURL(/\/$/);
+  await expect(page.locator("h2.zoomed-title")).toBeVisible();
+  await expect(page.locator("dialog[open]").filter({ has: find })).toHaveCount(
+    0,
+  );
+});
+
+test("dock respects keyboard geometry, accessibility preferences, feature settings and desktop boundary", async ({
+  page,
+}) => {
+  await seedOutline(page, STANDARD_TREE, {
+    kv: {
+      "account-prefs": [
+        {
+          key: "editor-feature:daily",
+          value: { key: "editor-feature:daily", enabled: false },
+        },
+      ],
+    },
+  });
+  await openSeededOutline(page, { anchorId: "alpha" });
+  const nav = page.getByRole("navigation", { name: "Outline navigation" });
+  await expect(nav.getByRole("link")).toHaveCount(1);
+  for (const width of [320, 767]) {
+    await page.setViewportSize({ width, height: 844 });
+    const targets = await page
+      .locator(".outline-header button, .mobile-navigation a")
+      .evaluateAll((elements) =>
+        elements.map((el) => {
+          const { width, height, left, right } = el.getBoundingClientRect();
+          return (
+            width >= 44 && height >= 44 && left >= 0 && right <= innerWidth
+          );
+        }),
+      );
+    expect(targets.every(Boolean)).toBe(true);
+  }
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await expect(page.locator(".mobile-navigation .lg-glass")).toHaveCount(0);
+  await expect(page.locator(".mobile-glass-header .lg-glass")).toHaveCount(0);
+  await expect(
+    page.locator(".mobile-glass-header .glass-header-solid-group"),
+  ).toHaveCount(1);
+  await page.goto("/alpha");
+  await expect(nav.locator("[aria-current=page]")).toHaveCount(0);
+  const home = nav.getByRole("link", { name: "Home", exact: true });
+  await home.focus();
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/\/$/);
+  await page.evaluate(() => {
+    Object.defineProperty(visualViewport, "height", {
+      configurable: true,
+      value: innerHeight - 300,
+    });
+    visualViewport!.dispatchEvent(new Event("resize"));
+  });
+  await expect(nav).toBeHidden();
+  await page.evaluate(() => {
+    Object.defineProperty(visualViewport, "height", {
+      configurable: true,
+      value: innerHeight,
+    });
+    visualViewport!.dispatchEvent(new Event("resize"));
+  });
+  await expect(nav).toBeVisible();
+  await page.setViewportSize({ width: 768, height: 844 });
+  await expect(nav).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Search", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page
+      .locator(".outline-header")
+      .getByRole("button", { name: "Quick add", exact: true }),
+  ).toHaveCount(0);
+});

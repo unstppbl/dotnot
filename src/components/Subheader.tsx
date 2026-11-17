@@ -1,0 +1,152 @@
+import { motion, useReducedMotion } from "motion/react";
+import {
+  Fragment,
+  useCallback,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
+
+import { cn } from "@/lib/utils";
+
+import type { PluginContext } from "../plugins/types";
+
+import { usePluginChrome } from "../plugins/registry";
+import { QueryFilterBar } from "./query-filter";
+
+/**
+ * Contextual chrome band below the main header. Plugin subheader slots render
+ * here (the tag filter bar today). Collapses away entirely when every slot
+ * renders no DOM (a slot may return a component that renders null — the band
+ * keys off childElementCount, not the React element being non-null). Sticks
+ * with the header as one unit. Border spans the full viewport (inner row is
+ * centered like Header); animated height measures the shell so the border
+ * isn't clipped.
+ */
+export function Subheader({ getCtx }: { getCtx?: () => PluginContext }) {
+  const { subheaderSlots } = usePluginChrome();
+  const reduceMotion = useReducedMotion();
+  const contentRef = useRef<HTMLDivElement>(null);
+  const shellRef = useRef<HTMLDivElement>(null);
+  const [{ open, height, measured, snapOpen }, setBand] = useState({
+    open: false,
+    height: 0,
+    measured: false,
+    snapOpen: false,
+  });
+  const openRef = useRef(false);
+  // The band initially uses its natural document height until the layout effects
+  // below measure it. That prevents a forced 0px frame whenever the editor (and
+  // this subheader) remounts during a day switch. Once measured, later open/close
+  // changes animate normally. Mount-time plugin chrome can explicitly keep the
+  // first measured frame snapped with `data-subheader-snap-open`.
+
+  // Kept as useCallback (not redundant despite React Compiler): it's a
+  // dependency of the useLayoutEffects below, so oxlint's exhaustive-deps gate
+  // (compiler-unaware) requires a stable identity. Removing it trips two
+  // correctness errors. See react-doctor/react-compiler-no-manual-memoization.
+  const measure = useCallback(() => {
+    const content = contentRef.current;
+    const shell = shellRef.current;
+    if (!content || !shell) return;
+    const has = Array.from(content.children).some((child) =>
+      child.hasAttribute("data-subheader-shared")
+        ? child.childElementCount > 0
+        : true,
+    );
+    const shouldSnapOpen = Boolean(
+      has &&
+      !openRef.current &&
+      content.querySelector("[data-subheader-snap-open]"),
+    );
+    openRef.current = has;
+    // offsetHeight on the bordered shell — scrollHeight on the inner row
+    // clipped the bottom border under overflow-hidden.
+    const nextHeight = has ? shell.offsetHeight : 0;
+    setBand((current) => ({
+      open: has,
+      height: nextHeight,
+      measured: true,
+      // Keep the snap through repeated observer measurements until it has
+      // painted; publishing these fields atomically prevents Motion from
+      // observing an intermediate open=true/snap=false render.
+      snapOpen: shouldSnapOpen || (has && current.snapOpen),
+    }));
+  }, []);
+
+  useLayoutEffect(() => {
+    const content = contentRef.current;
+    if (!content) return;
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(content);
+    const mo = new MutationObserver(measure);
+    mo.observe(content, { childList: true, subtree: true });
+    return () => {
+      ro.disconnect();
+      mo.disconnect();
+    };
+  }, [measure]);
+
+  useLayoutEffect(() => {
+    measure();
+  }, [open, measure]);
+
+  if (!getCtx) return null;
+
+  return (
+    <motion.div
+      initial={false}
+      animate={
+        !measured
+          ? undefined
+          : {
+              height: open ? (reduceMotion ? "auto" : height) : 0,
+              opacity: open ? 1 : 0,
+            }
+      }
+      transition={
+        !snapOpen && !reduceMotion
+          ? { duration: 0.15, ease: "easeOut" }
+          : { duration: 0 }
+      }
+      onAnimationComplete={() => {
+        if (snapOpen) setBand((current) => ({ ...current, snapOpen: false }));
+      }}
+      className="overflow-hidden bg-background"
+      aria-hidden={!open}
+      data-subheader-open={open ? "" : undefined}
+    >
+      {/* bg-background under the translucent tint: the band is sticky, so a
+          see-through background lets scrolled bullets bleed into the filter
+          row. The tint keeps its look but now composites opaque. */}
+      <div
+        ref={shellRef}
+        className={cn("bg-muted/30", open && "border-b border-border")}
+      >
+        <div ref={contentRef}>
+          {subheaderSlots
+            .filter((s) => s.placement === "full-width")
+            .map((s) => (
+              <Fragment key={s.id}>{s.render(getCtx)}</Fragment>
+            ))}
+          <section
+            data-subheader-shared
+            aria-label="Active filters"
+            className="mx-auto flex max-w-[720px] flex-wrap items-center gap-2 px-6 py-2 empty:hidden max-sm:px-4"
+          >
+            {/* The `?q=` filter is CORE chrome (ADR 0047 §6); it sits beside the
+              plugin subheader slots the way core commands sit beside plugin
+              commands. Renders nothing when idle, so the band still collapses. */}
+            <QueryFilterBar />
+            {subheaderSlots
+              .filter((s) => s.placement !== "full-width")
+              .map((s) => (
+                <Fragment key={s.id}>{s.render(getCtx)}</Fragment>
+              ))}
+          </section>
+        </div>
+      </div>
+    </motion.div>
+  );
+}

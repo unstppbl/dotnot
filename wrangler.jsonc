@@ -1,0 +1,131 @@
+{
+  // Cloudflare Workers deploy config. One Worker serves the static SPA AND the
+  // sync API. The outline lives in a per-user Durable Object; D1 holds Better
+  // Auth's identity tables + the legacy import source. See docs/adr/0011-the-auth-gate.md.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "dotnot",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-06-23",
+  // Better Auth (worker/auth.ts) imports node:crypto; nodejs_compat polyfills
+  // Node built-ins on the Workers runtime.
+  "compatibility_flags": ["nodejs_compat"],
+  // Upload Worker source maps to Cloudflare so stack traces in Workers Logs
+  // (and Sentry, #227) point at original source, not the minified bundle.
+  "upload_source_maps": true,
+  // Configure a custom domain only after provisioning your own deployment.
+  "workers_dev": true,
+  "assets": {
+    // TanStack Start SPA build output. `build:cf` copies _shell.html ->
+    // index.html in here so the root and the SPA fallback resolve.
+    "directory": "./dist/client",
+    // The Worker reaches assets via env.ASSETS (the non-/api fallback branch).
+    "binding": "ASSETS",
+    // Any unmatched path (e.g. /$nodeId zoom routes) serves index.html so the
+    // client router takes over.
+    "not_found_handling": "single-page-application",
+    // Run the Worker first for EVERY request. The static shell is public (it
+    // serves the Better Auth login screen), so the Worker's first line short-
+    // circuits non-/api requests to env.ASSETS (SPA fallback intact) without
+    // touching auth; only /api/* is session-gated. Worker-first keeps a single
+    // routing path and lets the asset/SPA fallback flow through env.ASSETS.
+    "run_worker_first": true,
+  },
+  // Configure your own admin identity and optional integrations before deployment.
+  // Empty admin IDs/emails fail closed. Notification recipients grant no access.
+  "vars": {
+    "ADMIN_USER_IDS": "",
+    "ADMIN_EMAILS": "",
+    "FEEDBACK_NOTIFICATION_EMAIL": "",
+    "FEEDBACK_REPLY_MODE": "disabled",
+    "SIGNUP_OPEN": "false",
+  },
+  // Transactional email (password reset today; invites later) via Cloudflare
+  // Email Service. A binding, not an API key — nothing to leak or rotate. The
+  // sender allowlist pins the From address at the platform layer (worker/
+  // email.ts pins it again in code). Requires the domain onboarded once:
+  // `npx wrangler email sending enable dotnot.example` (Workers Paid plan).
+  // Local `wrangler dev` SIMULATES the binding (miniflare logs the message,
+  // reset URL included, instead of sending — zero-config dev); flip
+  // `"remote": true` here temporarily to test real sends through dev.
+  "send_email": [
+    {
+      "name": "EMAIL",
+      "allowed_sender_addresses": [
+        "no-reply@dotnot.example",
+        "support@dotnot.example",
+      ],
+    },
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "dotnot-db",
+      // Local development works with this placeholder; replace with your own D1 ID.
+      "database_id": "00000000-0000-0000-0000-000000000000",
+    },
+  ],
+  // One Durable Object per user: USER_OUTLINE holds the user's whole outline +
+  // side-collections in colocated SQLite. The Worker routes each /api request to
+  // the caller's DO. See docs/adr/0008-sync-via-a-per-user-durable-object.md.
+  //
+  // SHARD retains frozen historical storage and supports account erasure only.
+  // Removing its class/binding or deleting its data requires separate approval.
+  "durable_objects": {
+    "bindings": [
+      { "name": "USER_OUTLINE", "class_name": "UserOutlineDO" },
+      { "name": "SHARD", "class_name": "ShardDO" },
+    ],
+  },
+  // SQLite-backed DO storage requires `new_sqlite_classes` (not new_classes).
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["UserOutlineDO"] },
+    { "tag": "v2", "new_sqlite_classes": ["ShardDO"] },
+  ],
+  // Off-site outline backups (#221): the daily cron sweep exports every user
+  // DO's snapshot into this bucket (`backups/<doName>/<YYYY-MM-DD>.json`).
+  // Create the bucket + its lifecycle expiry once before the first deploy —
+  // see docs/runbooks/offsite-backup-r2.md. Local dev simulates R2 on disk.
+  "r2_buckets": [
+    {
+      "binding": "BACKUPS",
+      "bucket_name": "dotnot-backups",
+    },
+  ],
+  // Daily backup sweep (09:00 UTC ≈ overnight US). The scheduled handler in
+  // worker/index.ts runs runBackupSweep; test locally with
+  // `wrangler dev --test-scheduled` + GET /__scheduled.
+  "triggers": {
+    "crons": ["0 9 * * *"],
+  },
+  // Per-user rate limit for the link-title unfurl endpoint (ADR 0016). The
+  // endpoint fetches user-supplied URLs server-side; keyed on user.id, it caps
+  // the scanner-abuse vector the auth gate alone leaves open. period must be
+  // 10 or 60. Kept off the outline DO so the DO stays single-purpose.
+  "ratelimits": [
+    {
+      "name": "UNFURL_LIMIT",
+      "namespace_id": "1001",
+      "simple": { "limit": 30, "period": 60 },
+    },
+    // Per-IP cap for the PUBLIC alpha-waitlist endpoint (no session to key on).
+    {
+      "name": "WAITLIST_LIMIT",
+      "namespace_id": "1002",
+      "simple": { "limit": 10, "period": 60 },
+    },
+    {
+      "name": "CAPTURE_LIMIT",
+      "namespace_id": "1003",
+      "simple": { "limit": 60, "period": 60 },
+    },
+  ],
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true,
+    },
+    "traces": {
+      "enabled": false,
+    },
+  },
+}

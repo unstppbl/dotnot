@@ -1,0 +1,405 @@
+import {
+  SiAnthropic,
+  SiClaude,
+  SiCursor,
+} from "@icons-pack/react-simple-icons";
+import {
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ComponentType,
+  type ReactNode,
+} from "react";
+import { toast } from "sonner";
+
+import {
+  BotIcon,
+  CheckIcon,
+  CopyIcon,
+  ExternalLinkIcon,
+  PuzzleIcon,
+  SourceCodeIcon,
+} from "@/lib/icons";
+
+import { hasBtoa, hasWindow } from "../env";
+import { useIsMobile } from "../hooks/use-mobile";
+import { cn } from "../lib/utils";
+import { Button } from "./ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "./ui/dialog";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from "./ui/input-group";
+import { Separator } from "./ui/separator";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
+
+// Quick setup stays in the dialog; the public MCP guide owns the full tool,
+// permission, and troubleshooting documentation.
+
+// Real users always view this on the prod origin, so `origin + /mcp` yields the
+// correct copyable URL and self-heals if the domain ever moves; the fallback
+// only matters during the `/` prerender (no `window`, SPA mode / ADR 0008).
+const MCP_URL = hasWindow()
+  ? `${window.location.origin}/mcp`
+  : "http://localhost:8787/mcp";
+
+function toBase64(s: string): string {
+  return hasBtoa() ? btoa(s) : "";
+}
+
+// One-click install deeplinks for the clients that support them. Cursor wants a
+// base64 server-config object; VS Code wants the url-encoded server entry.
+const CURSOR_DEEPLINK = `cursor://anysphere.cursor-deeplink/mcp/install?name=dotnot&config=${toBase64(
+  JSON.stringify({ url: MCP_URL }),
+)}`;
+const VSCODE_DEEPLINK = `vscode:mcp/install?${encodeURIComponent(
+  JSON.stringify({ name: "dotnot", type: "http", url: MCP_URL }),
+)}`;
+
+async function copy(text: string, label = "Copied") {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast.success(label);
+  } catch {
+    toast.error("Couldn't copy to clipboard");
+  }
+}
+
+/** Small icon button that copies `text` and flips to a check for a beat. */
+function CopyButton({ text, className }: { text: string; className?: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <Button
+      variant="ghost"
+      size="icon-sm"
+      className={className}
+      onClick={() => {
+        void copy(text);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1200);
+      }}
+      aria-label="Copy"
+    >
+      {copied ? <CheckIcon /> : <CopyIcon />}
+    </Button>
+  );
+}
+
+/** Read-only single-line value (the server URL) with a trailing copy button. */
+function CopyField({ value }: { value: string }) {
+  return (
+    <InputGroup>
+      <InputGroupInput readOnly value={value} className="font-mono text-xs" />
+      <InputGroupAddon align="inline-end">
+        <InputGroupButton onClick={() => void copy(value, "URL copied")}>
+          <CopyIcon />
+          Copy
+        </InputGroupButton>
+      </InputGroupAddon>
+    </InputGroup>
+  );
+}
+
+/** Monospace code block (a command or config snippet) with a copy button. */
+function CopyBlock({ code }: { code: string }) {
+  return (
+    <div className="relative">
+      <pre className="overflow-x-auto rounded-lg bg-muted p-3 pr-11 font-mono text-xs leading-relaxed text-foreground">
+        {code}
+      </pre>
+      <CopyButton text={code} className="absolute top-1.5 right-1.5" />
+    </div>
+  );
+}
+
+function Steps({ children }: { children: ReactNode }) {
+  return (
+    <ol className="flex list-decimal flex-col gap-1.5 pl-4 text-sm text-muted-foreground marker:text-muted-foreground/60">
+      {children}
+    </ol>
+  );
+}
+
+/** Deeplink "Add to X" button (renders as an anchor so the OS handles it). */
+function DeeplinkButton({ href, label }: { href: string; label: string }) {
+  return (
+    <Button variant="outline" size="sm" render={<a href={href} />}>
+      <ExternalLinkIcon data-icon="inline-start" />
+      {label}
+    </Button>
+  );
+}
+
+interface Client {
+  id: string;
+  name: string;
+  // Hugeicons and Simple Icons brand marks both render an <svg> that inherits
+  // size (tab CSS) and currentColor -- so they stay monochrome with the rail.
+  icon: ComponentType<{ className?: string }>;
+  content: ReactNode;
+}
+
+const CLIENTS: Client[] = [
+  {
+    id: "claude",
+    name: "Claude",
+    icon: SiClaude,
+    content: (
+      <Steps>
+        <li>
+          Open <span className="text-foreground">Customize → Connectors</span>{" "}
+          in Claude and select{" "}
+          <span className="text-foreground">Add custom connector</span>.
+        </li>
+        <li>
+          Paste the server URL above. If asked, choose{" "}
+          <span className="text-foreground">Register automatically</span> for
+          the OAuth client.
+        </li>
+        <li>Sign in with Dotnot, then enable it for your conversation.</li>
+      </Steps>
+    ),
+  },
+  {
+    id: "claude-code",
+    name: "Claude Code",
+    icon: SiAnthropic,
+    content: (
+      <>
+        <p className="text-sm text-muted-foreground">
+          Add Dotnot as an HTTP MCP server from your terminal.
+        </p>
+        <CopyBlock code={`claude mcp add --transport http dotnot ${MCP_URL}`} />
+        <p className="text-sm text-muted-foreground">
+          Then run <span className="font-mono text-foreground">/mcp</span>{" "}
+          inside Claude Code and pick Dotnot to sign in.
+        </p>
+      </>
+    ),
+  },
+  {
+    id: "cursor",
+    name: "Cursor",
+    icon: SiCursor,
+    content: (
+      <>
+        <p className="text-sm text-muted-foreground">
+          One click, or add it to your MCP config by hand.
+        </p>
+        <DeeplinkButton href={CURSOR_DEEPLINK} label="Add to Cursor" />
+        <div className="flex flex-col gap-2">
+          <p className="text-xs text-muted-foreground">
+            Or add to <span className="font-mono">.cursor/mcp.json</span>:
+          </p>
+          <CopyBlock
+            code={`{\n  "mcpServers": {\n    "dotnot": {\n      "url": "${MCP_URL}"\n    }\n  }\n}`}
+          />
+        </div>
+      </>
+    ),
+  },
+  {
+    id: "vscode",
+    name: "VS Code",
+    icon: SourceCodeIcon,
+    content: (
+      <>
+        <p className="text-sm text-muted-foreground">
+          One click, or add it to your workspace MCP config.
+        </p>
+        <DeeplinkButton href={VSCODE_DEEPLINK} label="Install in VS Code" />
+        <div className="flex flex-col gap-2">
+          <p className="text-xs text-muted-foreground">
+            Or add to <span className="font-mono">.vscode/mcp.json</span>:
+          </p>
+          <CopyBlock
+            code={`{\n  "servers": {\n    "dotnot": {\n      "type": "http",\n      "url": "${MCP_URL}"\n    }\n  }\n}`}
+          />
+        </div>
+      </>
+    ),
+  },
+  {
+    id: "chatgpt",
+    name: "ChatGPT",
+    icon: BotIcon,
+    content: (
+      <>
+        <p className="text-sm text-muted-foreground">
+          Requires developer mode. Availability depends on your plan and
+          workspace settings.
+        </p>
+        <Steps>
+          <li>
+            In ChatGPT settings, enable developer mode under{" "}
+            <span className="text-foreground">Apps &amp; Connectors</span>.
+          </li>
+          <li>
+            Create a connector with the server URL above and OAuth
+            authentication.
+          </li>
+          <li>Sign in with Dotnot.</li>
+        </Steps>
+      </>
+    ),
+  },
+  {
+    id: "other",
+    name: "Other apps",
+    icon: PuzzleIcon,
+    content: (
+      <p className="text-sm text-muted-foreground">
+        Add the server URL above in an app that supports Streamable HTTP with
+        OAuth, then sign in with Dotnot.
+      </p>
+    ),
+  },
+];
+
+/**
+ * Animates its own height as `children` reflow -- here, when the active tab
+ * panel swaps and the natural height jumps. A CSS `height` transition (not a
+ * keyframe) so a rapid tab-switch interrupts and retargets cleanly mid-flight;
+ * height is measured off the padded inner via ResizeObserver so wrap/reflow
+ * stays in sync, and `motion-reduce` opts reduced-motion users straight to the
+ * snap.
+ */
+function AnimateHeight({
+  children,
+  className,
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
+  const inner = useRef<HTMLDivElement>(null);
+  // undefined on first paint = natural `auto` height, so the initial open never
+  // animates from 0; the first measure sets it to its own value (no motion).
+  const [height, setHeight] = useState<number>();
+
+  useLayoutEffect(() => {
+    const el = inner.current;
+    if (!el) return;
+    const measure = () => setHeight(el.offsetHeight);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  return (
+    <div
+      style={{ height }}
+      className="overflow-hidden transition-[height] duration-200 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none"
+    >
+      <div ref={inner} className={className}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+export function McpConnectDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const isMobile = useIsMobile();
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex max-h-[85vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl">
+        <DialogHeader className="px-5 pt-5 pb-3">
+          <DialogTitle>Connect to your AI apps</DialogTitle>
+          <DialogDescription>
+            Connect a compatible AI app to read, edit, and delete content across
+            your whole outline. Sign in with Dotnot; no API key needed.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="flex flex-col gap-1.5 px-5 pb-4">
+          <span className="text-xs font-medium text-muted-foreground">
+            Server URL
+          </span>
+          <CopyField value={MCP_URL} />
+          {/* ADR 0043: redaction is context hygiene, not access control. */}
+          <p className="text-xs text-muted-foreground">
+            Spoilers (<span className="font-mono">||hidden||</span>) are
+            redacted by default. This is not access control.
+          </p>
+          <a
+            href="https://github.com/unstppbl/dotnot/blob/main/docs/mcp.md"
+            target="_blank"
+            rel="noreferrer noopener"
+            className="mt-1 w-fit text-sm underline underline-offset-4 hover:text-foreground"
+          >
+            MCP documentation
+            <span className="sr-only"> (opens in a new tab)</span>
+          </a>
+        </div>
+
+        <Separator />
+
+        <Tabs
+          orientation={isMobile ? "horizontal" : "vertical"}
+          defaultValue="claude"
+          className="min-h-0 flex-1 gap-0"
+        >
+          {/* Desktop: a vertical rail (line indicator). Mobile: a horizontal,
+              scrollable segmented strip -- a w-40 rail would eat half a phone's
+              width. `orientation` also flips the arrow-key nav axis, so it's
+              driven off the media query, not pure CSS. */}
+          <TabsList
+            variant={isMobile ? "default" : "line"}
+            className={cn(
+              isMobile
+                ? "w-full justify-start overflow-x-auto"
+                : "h-auto w-40 shrink-0 flex-col items-stretch gap-0.5 border-r p-2",
+            )}
+          >
+            {CLIENTS.map((c) => (
+              <TabsTrigger
+                key={c.id}
+                value={c.id}
+                className={cn("justify-start", isMobile && "flex-none")}
+              >
+                <c.icon />
+                {c.name}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+
+          <div className="min-w-0 flex-1 scroll-fade overflow-y-auto">
+            <AnimateHeight className="p-5">
+              {CLIENTS.map((c) => (
+                <TabsContent
+                  key={c.id}
+                  value={c.id}
+                  className="flex flex-col gap-4"
+                >
+                  {c.content}
+                </TabsContent>
+              ))}
+            </AnimateHeight>
+          </div>
+        </Tabs>
+
+        {/* Nominative-use notice for the app names and logos shown here and on
+            agent-created nodes (ADR 0081); mirrors the landing footer. */}
+        <p className="border-t px-5 py-3 text-xs text-muted-foreground">
+          Claude, ChatGPT, Cursor, Gemini, Grok, and other app names and logos
+          are trademarks of their respective owners. Dotnot is not affiliated
+          with, sponsored by, or endorsed by them.
+        </p>
+      </DialogContent>
+    </Dialog>
+  );
+}
